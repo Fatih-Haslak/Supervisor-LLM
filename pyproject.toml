@@ -1,0 +1,45 @@
+[build-system]
+requires = ["hatchling>=1.25,<2"]
+build-backend = "hatchling.build"
+
+[project]
+name = "local-agent-system"
+version = "0.1.0"
+description = "Local LLM agent architecture, developed in phases"
+requires-python = ">=3.11"
+dependencies = [
+  "llama-cpp-python>=0.3.35,<0.4",
+  "pydantic>=2.9,<3",
+  "pydantic-settings>=2.5,<3",
+]
+
+[project.optional-dependencies]
+download = ["huggingface-hub>=1,<2"]
+dev = [
+  "mypy>=1.11,<2",
+  "pytest>=8,<10",
+  "pytest-asyncio>=0.24,<2",
+  "ruff>=0.6,<1",
+]
+
+[project.scripts]
+local-agent = "app.main:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+packages = ["app"]
