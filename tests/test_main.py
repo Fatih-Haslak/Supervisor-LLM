@@ -1,3 +1,4 @@
+import sys
 from typing import Any
 
 import pytest
@@ -43,5 +44,19 @@ async def test_interactive_agent_continues_after_one_failed_task(
     captured = capsys.readouterr()
     assert exit_code == 0
     assert calls == ["ilk", "ikinci"]
-    assert "Hata: invalid decision" in captured.err
+    assert "Hata [INVALID_OUTPUT]" in captured.err
     assert "Asistan> Tamam" in captured.out
+
+
+def test_cli_hides_unexpected_exception_detail(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def broken_settings() -> Settings:
+        raise RuntimeError("PRIVATE_INTERNAL_DETAIL")
+
+    monkeypatch.setattr(sys, "argv", ["app.main", "--prompt", "hello"])
+    monkeypatch.setattr(main, "Settings", broken_settings)
+    assert main.main() == 1
+    error = capsys.readouterr().err
+    assert "Hata [INTERNAL_ERROR]" in error
+    assert "PRIVATE_INTERNAL_DETAIL" not in error

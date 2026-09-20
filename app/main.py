@@ -15,14 +15,17 @@ from app.agents.supervisor import Supervisor, SupervisorLimitError
 from app.agents.workers import build_workers, worker_descriptions
 from app.config.logging import configure_logging
 from app.config.settings import Settings
+from app.errors import format_cli_error
 from app.llm.client import LlamaCppClient, LLMError
 from app.llm.schemas import ChatMessage
+from app.llm.strategy import SharedModelStrategy
 from app.llm.structured import StructuredOutputError
 from app.memory.context import MemoryAwareLLM
 from app.memory.store import MemoryInput, SQLiteMemoryStore
 from app.observability.events import TraceRecorder, agent_span, record, trace_session
 from app.observability.llm import TracedLLM
 from app.orchestration.router import Router
+from app.security.approvals import TerminalApprover, ToolApprovalError
 from app.tools.calculator import CalculatorTool
 from app.tools.filesystem import DirectoryListTool, FileReadTool, FileWriteTool, Workspace
 from app.tools.python_exec import PythonExecTool
@@ -39,7 +42,8 @@ async def run_chat(prompt: str | None, settings: Settings) -> int:
         )
     ]
     async with LlamaCppClient(settings) as client:
-        llm = MemoryAwareLLM(client, memories)
+        strategy = SharedModelStrategy(MemoryAwareLLM(client, memories))
+        llm = strategy.for_role("chat")
         while True:
             if prompt is None:
                 try:
@@ -57,7 +61,7 @@ async def run_chat(prompt: str | None, settings: Settings) -> int:
             try:
                 result = await llm.chat(messages)
             except LLMError as exc:
-                print(f"Hata: {exc}", file=sys.stderr)
+                print(format_cli_error(exc), file=sys.stderr)
                 return 1
             print(f"Asistan> {result.content}")
             messages.append(ChatMessage(role="assistant", content=result.content))
@@ -78,7 +82,7 @@ async def run_agent(
 ) -> int:
     memories = await SQLiteMemoryStore(settings.memory_db_path).list()
     workspace = Workspace(Path("workspace"))
-    registry = ToolRegistry()
+    registry = ToolRegistry(approver=TerminalApprover() if sys.stdin.isatty() else None)
     registry.register(CalculatorTool())
     registry.register(FileReadTool(workspace))
     registry.register(FileWriteTool(workspace))
@@ -90,15 +94,19 @@ async def run_agent(
         allowed.add("python_exec")
 
     async with LlamaCppClient(settings) as client:
-        llm = MemoryAwareLLM(TracedLLM(client), memories)
-        agent = SingleAgent(llm, registry, allowed)
-        workers = build_workers(llm, registry, allow_python=allow_python)
+        strategy = SharedModelStrategy(MemoryAwareLLM(TracedLLM(client), memories))
+        agent = SingleAgent(strategy.for_role("single"), registry, allowed)
+        workers = build_workers(
+            strategy.for_role("general"), registry, allow_python=allow_python,
+            model_for_role=strategy.for_role,
+        )
         manager = (
             Supervisor(
-                llm,
+                strategy.for_role("supervisor"),
                 workers,
                 worker_descriptions=worker_descriptions(),
-                reviewer=ReviewerAgent(llm, registry),
+                reviewer=ReviewerAgent(strategy.for_role("reviewer"), registry),
+                planner_llm=strategy.for_role("planner"),
             )
             if supervisor or router
             else None
@@ -108,13 +116,14 @@ async def run_agent(
             from app.orchestration.graph import GraphOrchestrator
 
             graph_engine = GraphOrchestrator(
-                llm, workers,
+                strategy.for_role("supervisor"), workers,
                 worker_descriptions=worker_descriptions(),
-                reviewer=ReviewerAgent(llm, registry),
+                reviewer=ReviewerAgent(strategy.for_role("reviewer"), registry),
+                planner_llm=strategy.for_role("planner"),
             )
         route_engine = (
             Router(
-                llm, workers, manager,
+                strategy.for_role("router"), workers, manager,
                 worker_descriptions=worker_descriptions(),
                 review_code_with_supervisor=True,
             )
@@ -154,10 +163,10 @@ async def run_agent(
                         with agent_span("single"):
                             result = await agent.run(user_input)
                     record("task_completed", success=True)
-                except (AgentLimitError, SupervisorLimitError, LLMError,
+                except (AgentLimitError, SupervisorLimitError, ToolApprovalError, LLMError,
                         StructuredOutputError) as exc:
                     record("task_failed", error_type=type(exc).__name__)
-                    print(f"Hata: {exc}", file=sys.stderr)
+                    print(format_cli_error(exc), file=sys.stderr)
                     if prompt is not None:
                         return 1
                     continue
@@ -223,9 +232,9 @@ async def run_memory_command(args: argparse.Namespace, settings: Settings) -> in
             print("Bellek silindi" if deleted else "Bellek kaydı bulunamadı")
         return 0
     except ValidationError:
-        print("Hata: Geçersiz bellek kaydı veya gizli bilgi", file=sys.stderr)
-    except (OSError, sqlite3.Error, ValueError):
-        print("Hata: Bellek veritabanına erişilemiyor", file=sys.stderr)
+        print("Hata [INVALID_INPUT]: Geçersiz bellek kaydı veya gizli bilgi.", file=sys.stderr)
+    except (OSError, sqlite3.Error, ValueError) as exc:
+        print(format_cli_error(exc), file=sys.stderr)
     return 1
 
 
@@ -273,18 +282,22 @@ def main() -> int:
         parser.error("--router and --supervisor are separate modes")
     if args.graph and (args.router or args.supervisor or args.plan):
         parser.error("--graph cannot be combined with --router, --supervisor, or --plan")
-    settings = Settings()
-    configure_logging(settings.log_level)
-    if memory_command:
-        return asyncio.run(run_memory_command(args, settings))
-    if args.agent:
-        return asyncio.run(
-            run_agent(
-                args.prompt, settings, args.allow_python, args.show_tools,
-                args.supervisor, args.plan, args.router, args.graph, args.trace,
+    try:
+        settings = Settings()
+        configure_logging(settings.log_level)
+        if memory_command:
+            return asyncio.run(run_memory_command(args, settings))
+        if args.agent:
+            return asyncio.run(
+                run_agent(
+                    args.prompt, settings, args.allow_python, args.show_tools,
+                    args.supervisor, args.plan, args.router, args.graph, args.trace,
+                )
             )
-        )
-    return asyncio.run(run_chat(args.prompt, settings))
+        return asyncio.run(run_chat(args.prompt, settings))
+    except Exception as exc:
+        print(format_cli_error(exc), file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":

@@ -12,6 +12,7 @@ from app.tools.calculator import CalculatorTool
 from app.tools.filesystem import DirectoryListTool, FileReadTool, FileWriteTool, Workspace
 from app.tools.registry import ToolRegistry
 from app.tools.search import SearchTool
+from tests.support import ApproveWrites
 
 
 class ScriptedLLM:
@@ -35,7 +36,7 @@ class ScriptedLLM:
 
 def make_registry(root: Path) -> ToolRegistry:
     workspace = Workspace(root)
-    registry = ToolRegistry()
+    registry = ToolRegistry(approver=ApproveWrites())
     for tool in (
         CalculatorTool(), FileReadTool(workspace), FileWriteTool(workspace),
         DirectoryListTool(workspace), SearchTool(workspace),

@@ -9,6 +9,9 @@ from app.tools.base import BaseTool, ToolResult
 
 _MAX_FILE_BYTES = 1_000_000
 _BLOCKED_PARTS = {".git", ".venv", ".env"}
+_WINDOWS_DEVICES = {"con", "prn", "aux", "nul", "com1", "com2", "com3", "com4",
+                    "com5", "com6", "com7", "com8", "com9", "lpt1", "lpt2",
+                    "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9"}
 
 
 class WorkspaceAccessError(ValueError):
@@ -28,8 +31,14 @@ class Workspace:
         # Accept user-facing paths such as workspace/report.md as root-relative.
         if relative.parts and relative.parts[0].casefold() == self.root.name.casefold():
             relative = Path(*relative.parts[1:]) if len(relative.parts) > 1 else Path(".")
-        if any(part in _BLOCKED_PARTS or part.startswith(".env.") for part in relative.parts):
-            raise WorkspaceAccessError("Protected workspace path")
+        for part in relative.parts:
+            normalized = part.rstrip(" .").casefold()
+            if ":" in part or any(ord(character) < 32 for character in part):
+                raise WorkspaceAccessError("Unsupported workspace path")
+            if normalized.split(".", 1)[0] in _WINDOWS_DEVICES:
+                raise WorkspaceAccessError("Windows device paths are not allowed")
+            if normalized in _BLOCKED_PARTS or normalized.startswith(".env."):
+                raise WorkspaceAccessError("Protected workspace path")
         target = (self.root / relative).resolve()
         if not target.is_relative_to(self.root):
             raise WorkspaceAccessError("Path must stay inside workspace")
@@ -83,11 +92,25 @@ class FileReadTool(BaseTool[FileReadInput]):
 
 class FileWriteTool(BaseTool[FileWriteInput]):
     name = "file_write"
+    requires_approval = True
     description = "Write a UTF-8 file inside workspace; overwrite must be explicit."
     input_type = FileWriteInput
 
     def __init__(self, workspace: Workspace) -> None:
         self._workspace = workspace
+
+    def preflight(self, arguments: FileWriteInput) -> ToolResult | None:
+        try:
+            target = self._workspace.resolve(arguments.path)
+            if not target.parent.is_dir():
+                return ToolResult.fail("DirectoryNotFound", "Parent directory does not exist")
+            if target.is_dir():
+                return ToolResult.fail("InvalidPath", "Target is a directory")
+            if target.exists() and not arguments.overwrite:
+                return ToolResult.fail("AlreadyExists", "Overwrite was not allowed")
+        except WorkspaceAccessError as exc:
+            return ToolResult.fail("PermissionDenied", str(exc))
+        return None
 
     @staticmethod
     def _write(target: Path, content: str, overwrite: bool) -> None:
@@ -122,6 +145,15 @@ class DirectoryListTool(BaseTool[DirectoryListInput]):
     def __init__(self, workspace: Workspace) -> None:
         self._workspace = workspace
 
+    def _visible(self, entry: Path) -> bool:
+        if entry.is_symlink():
+            return False
+        try:
+            self._workspace.resolve(str(entry.relative_to(self._workspace.root)))
+            return True
+        except (ValueError, WorkspaceAccessError):
+            return False
+
     async def execute(self, arguments: DirectoryListInput) -> ToolResult:
         try:
             target = self._workspace.resolve(arguments.path)
@@ -130,8 +162,9 @@ class DirectoryListTool(BaseTool[DirectoryListInput]):
             entries = await asyncio.to_thread(
                 lambda: sorted(target.iterdir(), key=lambda p: p.name)
             )
-            lines = [f"{entry.name}/" if entry.is_dir() else entry.name for entry in entries[:200]]
-            if len(entries) > 200:
+            visible = [entry for entry in entries if self._visible(entry)]
+            lines = [f"{entry.name}/" if entry.is_dir() else entry.name for entry in visible[:200]]
+            if len(visible) > 200:
                 lines.append("... (listing limited to 200 entries)")
             return ToolResult.ok("\n".join(lines))
         except WorkspaceAccessError as exc:

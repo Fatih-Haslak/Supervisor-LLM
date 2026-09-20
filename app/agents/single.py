@@ -8,7 +8,9 @@ from pydantic import BaseModel
 from app.llm.client import LLMClient
 from app.llm.schemas import ChatMessage
 from app.llm.structured import FinalAnswerDecision, StructuredDecisionClient
+from app.orchestration.context import bounded_messages
 from app.orchestration.state import AgentState, ToolCallRecord
+from app.security.approvals import ToolApprovalError
 from app.tools.registry import ToolRegistry
 
 
@@ -84,7 +86,7 @@ class SingleAgent:
 
         for step in range(1, self._max_steps + 1):
             state.step_count = step
-            decision = await self._decider.decide(state.messages)
+            decision = await self._decider.decide(bounded_messages(state.messages))
             state.messages.append(ChatMessage(role="assistant", content=decision.model_dump_json()))
             if isinstance(decision, FinalAnswerDecision):
                 state.finish(decision.answer)
@@ -94,6 +96,8 @@ class SingleAgent:
             result = await self._registry.execute(
                 decision.tool, decision.arguments, self._allowed_tools
             )
+            if result.error_type in {"ApprovalRequired", "ApprovalDenied"}:
+                raise ToolApprovalError(result.error_type)
             state.tool_results.append(
                 ToolCallRecord(
                     tool=decision.tool,

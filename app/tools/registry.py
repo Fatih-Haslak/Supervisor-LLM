@@ -1,16 +1,21 @@
 """Registry that exposes and executes only explicitly allowed tools."""
 
 from collections.abc import Collection, Mapping
+from copy import deepcopy
 from time import perf_counter
 from typing import Any
 
+from pydantic import ValidationError
+
 from app.observability.events import record
+from app.security.approvals import ApprovalRequest, Approver
 from app.tools.base import BaseTool, ToolResult, ToolSpec
 
 
 class ToolRegistry:
-    def __init__(self) -> None:
+    def __init__(self, approver: Approver | None = None) -> None:
         self._tools: dict[str, BaseTool[Any]] = {}
+        self._approver = approver
 
     def register(self, tool: BaseTool[Any]) -> None:
         if tool.name in self._tools:
@@ -33,10 +38,38 @@ class ToolRegistry:
                 result = ToolResult.fail("PermissionDenied", "Tool is not allowed for this caller")
             else:
                 tool = self._tools.get(name)
-                result = (
-                    ToolResult.fail("UnknownTool", "Tool is not registered")
-                    if tool is None else await tool.run(arguments)
-                )
+                if tool is None:
+                    result = ToolResult.fail("UnknownTool", "Tool is not registered")
+                else:
+                    try:
+                        validated = tool.input_type.model_validate(dict(arguments))
+                    except ValidationError:
+                        result = ToolResult.fail(
+                            "InvalidArguments", "Tool arguments failed validation"
+                        )
+                    else:
+                        normalized = validated.model_dump()
+                        preflight_error = tool.preflight(validated)
+                        if preflight_error is not None:
+                            result = preflight_error
+                        elif tool.requires_approval:
+                            if self._approver is None:
+                                result = ToolResult.fail(
+                                    "ApprovalRequired", "Human approval is required for this tool"
+                                )
+                            else:
+                                request = ApprovalRequest(
+                                    tool=name, arguments=deepcopy(normalized)
+                                )
+                                approved = await self._approver.request_approval(request)
+                                result = (
+                                    await tool.run(normalized) if approved is True
+                                    else ToolResult.fail(
+                                        "ApprovalDenied", "Human approval was denied"
+                                    )
+                                )
+                        else:
+                            result = await tool.run(normalized)
         except Exception as exc:
             record(
                 "tool_call", tool=name, success=False,

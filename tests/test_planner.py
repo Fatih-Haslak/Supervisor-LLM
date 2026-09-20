@@ -14,6 +14,7 @@ from app.orchestration.state import TaskPlan
 from app.tools.filesystem import FileReadTool, FileWriteTool, Workspace
 from app.tools.registry import ToolRegistry
 from app.tools.search import SearchTool
+from tests.support import ApproveWrites
 
 
 class ScriptedLLM:
@@ -81,7 +82,7 @@ async def test_planned_supervisor_passes_first_result_to_second_worker(tmp_path:
     root.mkdir()
     (root / "source.txt").write_text("Proje kodu: MAVİ", encoding="utf-8")
     workspace = Workspace(root)
-    registry = ToolRegistry()
+    registry = ToolRegistry(approver=ApproveWrites())
     registry.register(SearchTool(workspace))
     registry.register(FileReadTool(workspace))
     registry.register(FileWriteTool(workspace))

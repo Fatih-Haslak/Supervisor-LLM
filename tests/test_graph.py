@@ -13,6 +13,7 @@ from app.orchestration.graph import GraphOrchestrator
 from app.orchestration.state import AgentState, ToolCallRecord
 from app.tools.filesystem import FileReadTool, FileWriteTool, Workspace
 from app.tools.registry import ToolRegistry
+from tests.support import ApproveWrites
 
 
 class ScriptedLLM:
@@ -90,7 +91,7 @@ class WritingWorker:
 def make_registry(root: Path) -> ToolRegistry:
     root.mkdir()
     workspace = Workspace(root)
-    registry = ToolRegistry()
+    registry = ToolRegistry(approver=ApproveWrites())
     registry.register(FileReadTool(workspace))
     registry.register(FileWriteTool(workspace))
     return registry

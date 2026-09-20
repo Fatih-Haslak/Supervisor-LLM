@@ -98,7 +98,10 @@ class ReviewerAgent:
                         ),
                         tool_calls=read_calls,
                     )
-            files.append({"path": path, "content": result.output[:6000]})
+            content = result.output
+            if len(content) > 1800:
+                content = content[:1400] + "\n[earlier content omitted]\n" + content[-400:]
+            files.append({"path": path, "content": content})
 
         evidence = {
             "user_request": user_request,

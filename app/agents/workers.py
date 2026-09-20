@@ -1,10 +1,12 @@
 """Specialized worker policies sharing one LLM and one tool registry."""
 
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from app.agents.single import SingleAgent
 from app.agents.supervisor import SingleAgentWorker, Worker
 from app.llm.client import LLMClient
+from app.llm.strategy import ModelRole
 from app.tools.registry import ToolRegistry
 
 
@@ -15,7 +17,7 @@ class WorkerPolicy:
     allowed_tools: frozenset[str]
 
 
-WORKER_POLICIES: dict[str, WorkerPolicy] = {
+WORKER_POLICIES: dict[ModelRole, WorkerPolicy] = {
     "general": WorkerPolicy(
         description="Simple questions, calculations, and mixed workspace tasks.",
         instructions="Use calculator for arithmetic. Work only inside workspace.",
@@ -51,7 +53,8 @@ WORKER_POLICIES: dict[str, WorkerPolicy] = {
 
 
 def build_workers(
-    llm: LLMClient, registry: ToolRegistry, *, allow_python: bool = False
+    llm: LLMClient, registry: ToolRegistry, *, allow_python: bool = False,
+    model_for_role: Callable[[ModelRole], LLMClient] | None = None,
 ) -> dict[str, Worker]:
     workers: dict[str, Worker] = {}
     for name, policy in WORKER_POLICIES.items():
@@ -60,7 +63,7 @@ def build_workers(
             allowed.add("python_exec")
         workers[name] = SingleAgentWorker(
             SingleAgent(
-                llm,
+                model_for_role(name) if model_for_role is not None else llm,
                 registry,
                 allowed,
                 role_name=name,

@@ -19,6 +19,7 @@ class AgentOutput(BaseModel):
     agent: str
     task: str
     answer: str
+    planned_id: int | None = Field(default=None, ge=1)
 
 
 class PlannedTask(BaseModel):

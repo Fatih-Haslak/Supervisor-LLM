@@ -5,7 +5,7 @@ from collections.abc import Collection
 
 from pydantic import ValidationError
 
-from app.llm.client import LLMClient
+from app.llm.client import LLMClient, LLMContextOverflowError
 from app.llm.schemas import ChatMessage
 from app.llm.structured import StructuredOutputError
 from app.observability.events import record
@@ -31,6 +31,8 @@ class Planner:
     async def plan(self, request: str) -> TaskPlan:
         if not request.strip():
             raise ValueError("User request must not be empty")
+        if len(request) > 6000:
+            raise LLMContextOverflowError("Planning request exceeds the model context budget")
         messages = [
             ChatMessage(
                 role="system",

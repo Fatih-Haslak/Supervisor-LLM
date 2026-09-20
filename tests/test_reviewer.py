@@ -11,6 +11,7 @@ from app.orchestration.state import AgentState, ToolCallRecord
 from app.tools.base import ToolResult
 from app.tools.filesystem import FileReadTool, FileWriteTool, Workspace
 from app.tools.registry import ToolRegistry
+from tests.support import ApproveWrites
 
 
 class ScriptedLLM:
@@ -32,7 +33,7 @@ class ScriptedLLM:
 
 def make_registry(root: Path) -> ToolRegistry:
     workspace = Workspace(root)
-    registry = ToolRegistry()
+    registry = ToolRegistry(approver=ApproveWrites())
     registry.register(FileReadTool(workspace))
     registry.register(FileWriteTool(workspace))
     return registry

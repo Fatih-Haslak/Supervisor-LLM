@@ -8,7 +8,7 @@ from typing import Protocol
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from app.agents.supervisor import Worker
-from app.llm.client import LLMClient
+from app.llm.client import LLMClient, LLMContextOverflowError
 from app.llm.schemas import ChatMessage
 from app.llm.structured import StructuredOutputError
 from app.observability.events import agent_span, record
@@ -57,6 +57,8 @@ class Router:
     async def decide(self, request: str) -> RouteDecision:
         if not request.strip():
             raise ValueError("User request must not be empty")
+        if len(request) > 6000:
+            raise LLMContextOverflowError("Routing request exceeds the model context budget")
         messages = [
             ChatMessage(
                 role="system",

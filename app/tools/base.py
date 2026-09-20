@@ -36,6 +36,7 @@ class ToolSpec(BaseModel):
     name: str
     description: str
     parameters: dict[str, Any]
+    requires_approval: bool = False
 
 
 ArgumentsT = TypeVar("ArgumentsT", bound=BaseModel)
@@ -45,13 +46,19 @@ class BaseTool(ABC, Generic[ArgumentsT]):
     name: str
     description: str
     input_type: type[ArgumentsT]
+    requires_approval: bool = False
 
     def spec(self) -> ToolSpec:
         return ToolSpec(
             name=self.name,
             description=self.description,
             parameters=self.input_type.model_json_schema(),
+            requires_approval=self.requires_approval,
         )
+
+    def preflight(self, arguments: ArgumentsT) -> ToolResult | None:
+        """Reject impossible or forbidden operations before requesting approval."""
+        return None
 
     async def run(self, arguments: Mapping[str, object]) -> ToolResult:
         try:
@@ -60,6 +67,8 @@ class BaseTool(ABC, Generic[ArgumentsT]):
             return ToolResult.fail("InvalidArguments", "Tool arguments failed validation")
         try:
             return await self.execute(parsed)
+        except TimeoutError:
+            return ToolResult.fail("Timeout", "Tool execution exceeded its time limit")
         except Exception:
             return ToolResult.fail("ToolExecutionError", "Tool execution failed")
 

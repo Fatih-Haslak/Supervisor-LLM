@@ -1,6 +1,6 @@
 # Local LLM Agent System
 
-Bu depo, `yapilacaklar.md` yol haritasının **Faz 0–13** uygulamasıdır.
+Bu depo, `yapilacaklar.md` yol haritasının **Faz 0–20** uygulamasıdır.
 GGUF modeli Python sürecinde doğrudan yüklenir; LM Studio sunucusu ve API token
 gerekmez. Tek agent döngüsü, görev başına merkezi `AgentState`, supervisor
 yönlendirmesi ve uzman worker'lar vardır.
@@ -174,3 +174,77 @@ sayısı ve hata türlerini içerir. Prompt, model cevabı, araç argümanları 
 ```powershell
 .venv\Scripts\python.exe -m app.main --agent --supervisor --trace --prompt "3+44 işlemini hesapla"
 ```
+
+## Hata yönetimi (Faz 14)
+
+CLI hataları `Hata [KOD]: açıklama` biçiminde gösterir; ham model yanıtı veya
+Python traceback'i yazdırmaz. Geçersiz yapılandırılmış yanıtlar sınırlı sayıda
+yeniden denenir. `LLM_TIMEOUT`, `CONTEXT_OVERFLOW`, `INVALID_OUTPUT`,
+`AGENT_LIMIT`, `SUPERVISOR_LIMIT`, `INVALID_INPUT` ve `STORAGE_FAILURE` ayrı
+kodlarla bildirilir. Araçlar başarısız olduğunda `ToolResult` içinde
+`error_type` ve temiz bir mesaj döndürür; Python aracı kendi subprocess'ini
+süre dolunca sonlandırır.
+
+`AGENT_LLM_TIMEOUT_SECONDS` varsayılan olarak 120'dir. Süre aşılırsa çağrı
+bekleyen kullanıcıya hata döner; Python sürecindeki yerel model üretimi güvenli
+biçimde zorla durdurulamaz. Arka planda tamamlanana kadar paylaşılan modelin
+kilidi korunur; sonraki model çağrıları bu işlemi bekleyebilir. Sürekli model
+takılmalarında uygulamayı yeniden başlatın.
+
+## Onay ve güvenlik (Faz 15–16)
+
+`file_write` artık onay gerektirir. Etkileşimli terminalde araç adı, doğrulanmış
+yol ve yazılacak içerik gösterilir; yalnızca açık `evet`/`e` yanıtı işlemi
+başlatır. Terminal yoksa veya onay reddedilirse görev sırasıyla
+`APPROVAL_REQUIRED` ya da `APPROVAL_DENIED` koduyla durur. Çok büyük içerikler
+terminalde tam gösterilemediği için onaylanmaz. Salt okunur araçlar bu soruyu
+sormaz.
+
+Dosya araçları `workspace/` dışını ve `.env`, `.git`, `.venv` gibi korunan
+yolları engeller; Windows büyük/küçük harf varyantları, alternatif akış
+adları ve aygıt adları da reddedilir. Dizin listeleme korunan yolları göstermez.
+Yerel belgelerden gelen komut benzeri metin veri olarak işaretlenir; araç
+izinleri ve yazma onayı model metninden bağımsız uygulanır. Python aracı
+izinli sözdizimi ve fonksiyonlarla ayrı süreçte çalışır; genel amaçlı OS
+sandbox'ı değildir.
+
+## Test ve değerlendirme (Faz 17–18)
+
+`tests/test_end_to_end.py`, planlanan bir CSV okuma → hesaplama → rapor yazma →
+reviewer akışını gerçek dosya ve araçlarla, sahte model yanıtlarıyla doğrular.
+Diğer testler geçersiz JSON, eksik dosya, izin, onay, timeout ve retry
+sınırlarını kapsar.
+
+Yerel modelin örnek görevlerdeki performansını ölçmek için:
+
+```powershell
+.venv\Scripts\python.exe -m app.evaluation.runner
+```
+
+Görevler `eval/cases.json` içindedir. Dosya örnekleri her vaka için geçici bir
+çalışma alanına yazılır; kayıtlı kişisel bellek değerlendirmeye katılmaz.
+Rapor görev başarısı, araç/agent seçimi,
+ortalama adım ve süre, araç hata oranı, token sayıları, reviewer geçiş oranı ve
+retry oranını verir. Örnek set salt okunur işlemlerden oluşur; değerlendirme
+çalıştırıcısı yazma onayı vermez. `reviewer_pass_rate`, hiç inceleme olmayan
+sette `null` döner.
+
+## Bağlam yönetimi (Faz 19)
+
+Tam mesajlar ve araç sonuçları `AgentState` içinde tutulur. Modele gönderilen
+mesaj geçmişi yaklaşık 9.000 karakterle sınırlanır; ilk istek ve en yeni araç
+sonucu korunur. Planlı worker yalnızca kendi alt görevi ve bağımlı olduğu
+önceki worker çıktısını alır. Reviewer uzun dosyalarda baş ve son parçayı
+inceler; Python sözdizimini dosyanın tamamında kontrol eder. Uzun süreli
+bellekten en çok 20 kayıt ve yaklaşık 2.000 karakter eklenir. İlk istek veya
+atama bütçeye sığmazsa sessizce kesmek yerine `CONTEXT_OVERFLOW` döner.
+
+## Model stratejisi (Faz 20)
+
+`SharedModelStrategy` chat, supervisor, planner, router, reviewer ve worker
+rollerinin hepsine aynı yerel GGUF istemcisini verir. `LlamaCppClient` modeli
+ilk istekte bir kez yükler ve çağrıları tek kilitle sıraya alır. Bu, 16 GB VRAM'de
+aynı anda birden fazla büyük model tutmaz. Worker fabrikası rol bazlı istemci
+seçebilecek arayüze sahiptir; varsayılan çalıştırma yalnızca tek modeli kullanır.
+İleride farklı modeller atanırsa yükleme ve VRAM boşaltma politikasının ayrıca
+tanımlanması gerekir. Faz 21'deki eşzamanlı yürütme bu fazın kapsamına girmez.

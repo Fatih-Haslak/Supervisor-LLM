@@ -12,6 +12,7 @@ from app.observability.llm import TracedLLM
 from app.orchestration.state import AgentState
 from app.tools.filesystem import FileWriteTool, Workspace
 from app.tools.registry import ToolRegistry
+from tests.support import ApproveWrites
 
 
 class FakeBackend:
@@ -30,7 +31,7 @@ async def test_trace_has_ids_timing_tokens_but_no_content(tmp_path: Path) -> Non
     recorder = TraceRecorder()
     root = tmp_path / "workspace"
     root.mkdir()
-    registry = ToolRegistry()
+    registry = ToolRegistry(approver=ApproveWrites())
     registry.register(FileWriteTool(Workspace(root)))
     with trace_session(recorder):
         state = AgentState.for_request(

@@ -1,0 +1,25 @@
+[
+  {
+    "id": "arithmetic-single",
+    "task": "3+44 işlemini calculator aracıyla hesapla.",
+    "mode": "single",
+    "expected_tools": ["calculator"],
+    "expected_answer_contains": "47"
+  },
+  {
+    "id": "local-numbers-single",
+    "task": "workspace/numbers.txt dosyasını file_read ile oku; içindeki 10 ve 20 sayılarını calculator ile topla. Yalnızca toplamı yaz.",
+    "mode": "single",
+    "fixtures": {"numbers.txt": "10\n20\n"},
+    "expected_tools": ["file_read", "calculator"],
+    "expected_answer_contains": "30"
+  },
+  {
+    "id": "arithmetic-supervisor",
+    "task": "3+44 işlemini hesapla.",
+    "mode": "supervisor",
+    "expected_tools": ["calculator"],
+    "expected_agent": "general",
+    "expected_answer_contains": "47"
+  }
+]

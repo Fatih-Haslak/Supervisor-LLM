@@ -12,7 +12,14 @@ from app.memory.store import MemoryEntry
 class MemoryAwareLLM:
     def __init__(self, backend: LLMClient, entries: Sequence[MemoryEntry]) -> None:
         self._backend = backend
-        self._entries = list(entries[:20])
+        self._entries: list[MemoryEntry] = []
+        used_chars = 0
+        for entry in entries[:20]:
+            entry_chars = len(entry.key) + len(entry.value) + 40
+            if used_chars + entry_chars > 2000:
+                break
+            self._entries.append(entry)
+            used_chars += entry_chars
 
     async def chat(
         self,

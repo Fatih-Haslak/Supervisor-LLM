@@ -45,11 +45,13 @@ class GraphOrchestrator:
         max_json_retries: int = 2,
         max_review_retries: int = 2,
         worker_descriptions: Mapping[str, str] | None = None,
+        planner_llm: LLMClient | None = None,
     ) -> None:
         self._supervisor = Supervisor(
             llm, workers, reviewer=reviewer, max_rounds=max_rounds,
             max_json_retries=max_json_retries, max_review_retries=max_review_retries,
             worker_descriptions=worker_descriptions,
+            planner_llm=planner_llm,
         )
         self._reviewer = reviewer
         self._max_rounds = max_rounds

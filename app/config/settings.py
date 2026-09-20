@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     gpu_layers: int = Field(default=-1, ge=-1)
     cuda_dll_directory: Path | None = None
     llm_max_tokens: int = Field(default=512, ge=1, le=8192)
+    llm_timeout_seconds: float = Field(default=120, gt=0, le=600)
     llm_temperature: float = Field(default=0.2, ge=0, le=2)
     log_level: str = "INFO"
 

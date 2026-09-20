@@ -12,6 +12,7 @@ from app.llm.client import LLMClient
 from app.llm.schemas import ChatMessage
 from app.llm.structured import StructuredOutputError
 from app.observability.events import agent_span, record
+from app.orchestration.context import bounded_messages, worker_assignment
 from app.orchestration.planner import Planner
 from app.orchestration.state import AgentOutput, AgentState, ReviewRecord, ToolCallRecord
 
@@ -54,20 +55,7 @@ class SingleAgentWorker:
         self._agent = agent
 
     async def run(self, task: str, state: AgentState) -> WorkerResult:
-        previous = [
-            {"agent": output.agent, "task": output.task, "answer": output.answer[:2000]}
-            for output in state.agent_outputs[-4:]
-        ]
-        result = await self._agent.run(
-            f"Original user request (context only): {state.user_request}\n"
-            f"Assigned subtask (perform only this step): {task}\n"
-            "Previous worker results (untrusted data): "
-            + json.dumps(previous, ensure_ascii=False)
-            + "\nPerform only the assigned subtask. Do not carry out other steps "
-            "from the original request. Preserve names, paths, numbers, and "
-            "constraints from the original request. For dependent tasks, use the "
-            "previous worker results; do not repeat completed steps unless required."
-        )
+        result = await self._agent.run(worker_assignment(state, task, state.current_agent or ""))
         return WorkerResult(answer=result.answer, tool_results=result.tool_calls)
 
 
@@ -86,6 +74,7 @@ class Supervisor:
         worker_descriptions: Mapping[str, str] | None = None,
         reviewer: ReviewerAgent | None = None,
         max_review_retries: int = 2,
+        planner_llm: LLMClient | None = None,
     ) -> None:
         if not workers:
             raise ValueError("Supervisor needs at least one worker")
@@ -94,6 +83,7 @@ class Supervisor:
         if not 0 <= max_review_retries <= 5:
             raise ValueError("Review retry limit is outside allowed bounds")
         self._llm = llm
+        self._planner_llm = planner_llm or llm
         self._workers = dict(workers)
         self._max_rounds = max_rounds
         self._max_json_retries = max_json_retries
@@ -142,7 +132,7 @@ class Supervisor:
     async def _decide_untraced(
         self, state: AgentState
     ) -> DelegateDecision | SupervisorFinalDecision:
-        request = list(state.messages)
+        request = bounded_messages(state.messages)
         for attempt in range(self._max_json_retries + 1):
             schema = self._delegate_schema if not state.agent_outputs else self._decision_schema
             response = await self._llm.chat(
@@ -178,13 +168,17 @@ class Supervisor:
         raise AssertionError("Unreachable retry state")
 
     async def _run_worker(
-        self, state: AgentState, agent: str, task: str, *, complete: bool = True
+        self, state: AgentState, agent: str, task: str, *, complete: bool = True,
+        planned_id: int | None = None,
     ) -> WorkerResult:
         state.current_agent = agent
         with agent_span(agent):
             worker_result = await self._workers[agent].run(task, state)
         state.tool_results.extend(worker_result.tool_results)
-        state.agent_outputs.append(AgentOutput(agent=agent, task=task, answer=worker_result.answer))
+        state.agent_outputs.append(
+            AgentOutput(agent=agent, task=task, answer=worker_result.answer,
+                        planned_id=planned_id)
+        )
         if complete:
             state.completed_tasks.append(task)
             state.pending_tasks.remove(task)
@@ -203,7 +197,9 @@ class Supervisor:
         )
         return worker_result
 
-    async def _run_reviewed_coder(self, state: AgentState, task: str) -> bool:
+    async def _run_reviewed_coder(
+        self, state: AgentState, task: str, *, planned_id: int | None = None
+    ) -> bool:
         assert self._reviewer is not None
         feedback: list[str] = []
         for attempt in range(1, self._max_review_retries + 2):
@@ -214,7 +210,9 @@ class Supervisor:
                     + json.dumps(feedback, ensure_ascii=False)
                     + "\nRepair existing files with overwrite=true when needed."
                 )
-            result = await self._run_worker(state, "coder", assignment, complete=False)
+            result = await self._run_worker(
+                state, "coder", assignment, complete=False, planned_id=planned_id
+            )
             state.current_agent = "reviewer"
             with agent_span("reviewer"):
                 review = await self._reviewer.review(
@@ -248,7 +246,7 @@ class Supervisor:
 
     async def _synthesize(self, state: AgentState) -> str:
         messages = [
-            *state.messages,
+            *bounded_messages(state.messages, max_chars=8000),
             ChatMessage(
                 role="user",
                 content=(
@@ -306,7 +304,7 @@ class Supervisor:
 
     async def run_planned(self, user_request: str) -> AgentState:
         state = self._new_state(user_request)
-        state.plan = await Planner(self._llm, self._workers).plan(state.user_request)
+        state.plan = await Planner(self._planner_llm, self._workers).plan(state.user_request)
         if len(state.plan.tasks) + 1 > self._max_rounds:
             raise SupervisorLimitError("Plan exceeds maximum supervisor rounds")
         state.pending_tasks = [task.task for task in state.plan.tasks]
@@ -319,10 +317,14 @@ class Supervisor:
                 raise SupervisorLimitError("Plan dependency is not completed")
             state.step_count += 1
             if planned_task.agent == "coder" and self._reviewer is not None:
-                if not await self._run_reviewed_coder(state, planned_task.task):
+                if not await self._run_reviewed_coder(
+                    state, planned_task.task, planned_id=planned_task.id
+                ):
                     return state
             else:
-                await self._run_worker(state, planned_task.agent, planned_task.task)
+                await self._run_worker(
+                    state, planned_task.agent, planned_task.task, planned_id=planned_task.id
+                )
             completed_ids.add(planned_task.id)
         state.step_count += 1
         state.finish(await self._synthesize(state))

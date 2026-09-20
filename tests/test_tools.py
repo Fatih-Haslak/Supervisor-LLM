@@ -46,7 +46,9 @@ async def test_file_tools_stay_in_workspace_and_check_overwrite(tmp_path: Path) 
     outside.write_text("secret", encoding="utf-8")
     for path in (
         "../outside.txt", "workspace/../outside.txt", str(outside),
-        ".env", "workspace/.env", "C:\\Windows\\win.ini",
+        ".env", "workspace/.env", ".ENV", ".Env.local", ".env ",
+        ".env::$DATA", "CON.txt",
+        "C:\\Windows\\win.ini",
     ):
         result = await reader.run({"path": path})
         assert result.error_type == "PermissionDenied"
@@ -71,6 +73,19 @@ async def test_symlink_escape_is_blocked(tmp_path: Path) -> None:
     )
     assert write_result.error_type == "PermissionDenied"
     assert outside.read_text(encoding="utf-8") == "private"
+
+
+@pytest.mark.asyncio
+async def test_directory_listing_hides_secret_paths(tmp_path: Path) -> None:
+    root = tmp_path / "workspace"
+    root.mkdir()
+    (root / ".env").write_text("PRIVATE_KEY=hidden", encoding="utf-8")
+    (root / ".Env.local").write_text("PRIVATE_KEY=hidden", encoding="utf-8")
+    (root / "visible.txt").write_text("public", encoding="utf-8")
+    result = await DirectoryListTool(Workspace(root)).run({})
+    assert result.success
+    assert "visible.txt" in (result.output or "")
+    assert ".env" not in (result.output or "").casefold()
 
 
 @pytest.mark.asyncio

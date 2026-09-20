@@ -13,6 +13,19 @@ class LLMError(Exception):
     """Local model loading or generation failed."""
 
 
+class LLMTimeoutError(LLMError):
+    """The local model exceeded its cooperative generation deadline."""
+
+
+class LLMContextOverflowError(LLMError):
+    """The prompt exceeded the model context window."""
+
+
+def _is_context_overflow(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return "context window" in message or "n_ctx" in message or "context size" in message
+
+
 class LLMClient(Protocol):
     async def chat(
         self,
@@ -44,13 +57,23 @@ class LlamaCppClient:
         self._settings = settings
         self._model = model
         self._lock = asyncio.Lock()
+        self._pending: set[asyncio.Task[LLMResponse]] = set()
+        self._closing = False
 
     async def __aenter__(self) -> "LlamaCppClient":
         return self
 
     async def __aexit__(self, *_exc: object) -> None:
-        # Llama owns native memory; release it when the CLI session ends.
-        self._model = None
+        self._closing = True
+        if not self._pending:
+            self._model = None
+
+    def _on_done(self, task: asyncio.Task[LLMResponse]) -> None:
+        self._pending.discard(task)
+        if not task.cancelled():
+            task.exception()  # Consume a late error after the caller has timed out.
+        if self._closing and not self._pending:
+            self._model = None
 
     def _load_model(self) -> ChatBackend:
         if not self._settings.model_path.is_file():
@@ -90,7 +113,8 @@ class LlamaCppClient:
         json_mode: bool,
         json_schema: dict[str, Any] | None,
     ) -> LLMResponse:
-        assert self._model is not None
+        model = self._model
+        assert model is not None
         try:
             # llama-cpp-python applies the chat template embedded in the GGUF metadata.
             options: dict[str, Any] = {
@@ -103,7 +127,7 @@ class LlamaCppClient:
                 options["response_format"] = {"type": "json_object"}
                 if json_schema is not None:
                     options["response_format"]["schema"] = json_schema
-            result = self._model.create_chat_completion(**options)
+            result = model.create_chat_completion(**options)
             choice = result["choices"][0]
             content = choice["message"]["content"]
             if not isinstance(content, str):
@@ -116,9 +140,21 @@ class LlamaCppClient:
                 finish_reason=choice.get("finish_reason"),
                 usage=usage,
             )
+        except LLMError:
+            raise
+        except TimeoutError as exc:
+            raise LLMTimeoutError("Local model generation exceeded its time limit") from exc
         except (KeyError, IndexError, TypeError, ValueError) as exc:
+            if _is_context_overflow(exc):
+                raise LLMContextOverflowError(
+                    "Prompt exceeds the local model context window"
+                ) from exc
             raise LLMError("Local model returned an invalid chat response") from exc
         except Exception as exc:
+            if _is_context_overflow(exc):
+                raise LLMContextOverflowError(
+                    "Prompt exceeds the local model context window"
+                ) from exc
             raise LLMError("Local model generation failed") from exc
 
     async def chat(
@@ -130,6 +166,22 @@ class LlamaCppClient:
     ) -> LLMResponse:
         if not messages:
             raise ValueError("At least one chat message is required")
+        task = asyncio.create_task(self._chat_serial(messages, json_mode, json_schema))
+        self._pending.add(task)
+        task.add_done_callback(self._on_done)
+        try:
+            return await asyncio.wait_for(
+                asyncio.shield(task), timeout=self._settings.llm_timeout_seconds
+            )
+        except TimeoutError as exc:
+            raise LLMTimeoutError("Local model generation exceeded its time limit") from exc
+
+    async def _chat_serial(
+        self,
+        messages: Sequence[ChatMessage],
+        json_mode: bool,
+        json_schema: dict[str, Any] | None,
+    ) -> LLMResponse:
         async with self._lock:
             if self._model is None:
                 self._model = await asyncio.to_thread(self._load_model)
