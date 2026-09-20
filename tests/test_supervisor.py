@@ -13,6 +13,7 @@ class ScriptedLLM:
     def __init__(self, responses: list[str]) -> None:
         self._responses = iter(responses)
         self.requests: list[list[ChatMessage]] = []
+        self.schemas: list[dict[str, Any]] = []
 
     async def chat(
         self,
@@ -23,6 +24,7 @@ class ScriptedLLM:
     ) -> LLMResponse:
         assert json_schema is not None
         self.requests.append(list(messages))
+        self.schemas.append(json_schema)
         return LLMResponse(content=next(self._responses), model="scripted")
 
 
@@ -58,6 +60,8 @@ async def test_supervisor_delegates_then_synthesizes() -> None:
     assert state.pending_tasks == []
     assert state.agent_outputs[0].agent == "general"
     assert "Worker result" in llm.requests[1][-1].content
+    assert llm.schemas[0]["properties"]["action"]["const"] == "delegate"
+    assert "oneOf" in llm.schemas[1]
 
 
 @pytest.mark.asyncio

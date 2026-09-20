@@ -88,7 +88,7 @@ async def test_supervisor_routes_to_file_agent_and_collects_file_result(tmp_path
     assert state.agent_outputs[0].agent == "file_agent"
     assert state.tool_results[0].tool == "file_write"
     assert state.tool_results[0].result.success
-    assert llm.schemas[0]["$defs"]["DelegateDecision"]["properties"]["next_agent"]["enum"] == [
+    assert llm.schemas[0]["properties"]["next_agent"]["enum"] == [
         "coder", "file_agent", "general", "researcher"
     ]
 

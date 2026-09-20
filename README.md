@@ -1,6 +1,6 @@
 # Local LLM Agent System
 
-Bu depo, `yapilacaklar.md` yol haritasının **Faz 0–8** uygulamasıdır.
+Bu depo, `yapilacaklar.md` yol haritasının **Faz 0–13** uygulamasıdır.
 GGUF modeli Python sürecinde doğrudan yüklenir; LM Studio sunucusu ve API token
 gerekmez. Tek agent döngüsü, görev başına merkezi `AgentState`, supervisor
 yönlendirmesi ve uzman worker'lar vardır.
@@ -13,7 +13,7 @@ NVIDIA GPU için `llama-cpp-python` CUDA wheel kurulmalıdır. Windows PowerShel
 ```powershell
 uv venv --python 3.12 .venv
 uv pip install --python .venv\Scripts\python.exe --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cu130 llama-cpp-python
-uv pip install -e '.[dev,download]'
+uv pip install -e '.[dev,download,graph]'
 ```
 
 Başlangıç modeli, Qwen'in [Qwen3-8B-GGUF](https://huggingface.co/Qwen/Qwen3-8B-GGUF)
@@ -49,7 +49,10 @@ Tool kullanan tek agent için:
 .venv\Scripts\python.exe -m app.main --agent --show-tools --prompt "25*17 sonucunu hesap makinesiyle bul"
 .venv\Scripts\python.exe -m app.main --agent --supervisor --show-tools --prompt "3+44 işlemini hesapla"
 .venv\Scripts\python.exe -m app.main --agent --supervisor --plan --show-tools --prompt "workspace dosyalarını listele"
+.venv\Scripts\python.exe -m app.main --agent --router --show-tools --prompt "3+44 işlemini hesapla"
 .venv\Scripts\python.exe -m app.main --agent --supervisor --show-tools --prompt "workspace içindeki belgelerde Fatih Tekke adını ara"
+.venv\Scripts\python.exe -m app.main --agent --graph --show-tools --prompt "3+44 işlemini hesapla"
+.venv\Scripts\python.exe -m app.main --agent --graph --trace --show-tools --prompt "3+44 işlemini hesapla"
 ```
 
 `--show-tools`, çağrılan araçların yalnızca adlarını gösterir. `--allow-python`
@@ -58,6 +61,14 @@ eklenirse kısıtlı Python aracı açılır. Bu araç ayrı subprocess, süre s
 sistemi sandbox'ı değildir. Varsayılan agent izinlerinde kapalıdır.
 Etkileşimli agent modunda bir görev hata verirse hata yazdırılır ve yeni `Görev>`
 girdisi beklenir. `--prompt` ile tek görev çalıştırıldığında hata çıkış kodu 1'dir.
+
+`--graph`, LangGraph ile ayrı bir supervisor → worker → reviewer akışı çalıştırır.
+Mevcut özel orchestration yolu `--supervisor` ile kullanılmaya devam eder.
+Graph aynı GGUF modelini, worker'ları, araç kayıt defterini ve `AgentState`'i
+kullanır; coder çıktısı reviewer'dan geçer ve başarısız inceleme en fazla iki
+kez düzeltmeye döner. İlk supervisor kararı şemada yalnızca worker delege
+edebilir; böylece model worker çalışmadan son cevap üretmez. `--graph`,
+`--supervisor`, `--router` ve `--plan` ile birlikte kullanılamaz.
 
 `llama-cpp-python`, GGUF dosyasını Python sürecinde çalıştıran llama.cpp
 bağlayıcısıdır. Ayrı bir model sunucusu çalıştırmaz. Transformers ile doğrudan
@@ -106,7 +117,7 @@ Hepsi aynı GGUF model örneğini kullanır, fakat prompt ve araç izinleri ayr�
 
 `search` aracı yalnızca `workspace/` altındaki UTF-8 metinlerde arama yapar;
 internete bağlanmaz. Güncel veya doğrulanamayan bilgi sorularında yerel modelin
-yanıtı kaynak doğrulaması sayılmaz. Reviewer sonraki fazların konusudur.
+yanıtı kaynak doğrulaması sayılmaz.
 
 `--plan` seçeneği supervisor'dan önce 1–4 alt görevli yapılandırılmış bir plan
 ister. Plan görevlerinin agent adları, benzersiz kimlikleri ve bağımlılıkları
@@ -114,3 +125,52 @@ doğrulanır. Bağımlı görevler önceki worker çıktısını bağlam olarak 
 yalnızca kendilerine atanan adımı yürütür. Plan bittikten sonra supervisor tek
 son cevap üretir. `--supervisor` tek başına önceki dinamik yönlendirme modunu
 kullanır.
+
+`--router`, basit tek adımlı görevlerde worker'ı doğrudan seçer. Karar
+`agent` ve 0–1 arasında `confidence` alanlarından oluşur. Güven 0,8'in
+altındaysa, karar geçersizse veya istek açıkça "önce ... sonra ..." şeklinde
+sıralı iş tarif ediyorsa planlı supervisor çalışır. `--show-tools` rota ve
+kullanılan araçları gösterir. Böylece basit hesaplarda supervisor'ın ek model
+çağrıları yapılmaz.
+
+Supervisor, Coder çıktısını ayrıca read-only Reviewer'a gönderir. Reviewer
+yazılan workspace dosyasını `file_read` ile yeniden okur, Python dosyalarında
+sözdizimini kodu çalıştırmadan kontrol eder ve yapılandırılmış `pass/fail`
+kararı üretir. Geçmezse sorunları Coder'a iletir; en fazla iki düzeltme denemesi
+yapar. Son deneme de başarısızsa görev tamamlanmış sayılmaz ve bağımlı görevler
+çalıştırılmaz. `--show-tools` inceleme sonucunu gösterir. `--router` ile seçilen
+Coder görevleri de inceleme için planlı supervisor yoluna gider.
+
+## Bellek (Faz 11)
+
+`AgentState` bir görevin mesajlarını, planını, araç sonuçlarını ve worker
+çıktılarını görev boyunca tutar. Görevler arası tercihler ve kararlar SQLite'ta
+saklanır. Belleğe yalnızca şu açık komutlar yazar; sohbet geçmişi otomatik
+kaydedilmez:
+
+```powershell
+.venv\Scripts\python.exe -m app.main --memory-save response_language "Türkçe yanıt ver" --memory-category preference
+.venv\Scripts\python.exe -m app.main --memory-save project_backend "GGUF modeli Python sürecinde çalışır" --memory-category decision
+.venv\Scripts\python.exe -m app.main --memory-list
+.venv\Scripts\python.exe -m app.main --memory-delete response_language
+```
+
+Sonraki sohbet ve agent görevleri en güncel 20 kaydı model bağlamında kullanır.
+Etkileşimli oturum açıksa yeni kayıtların görünmesi için oturumu yeniden başlatın.
+Güncel kullanıcı isteği kayıtla çelişirse güncel istek önceliklidir. Bellek
+veritabanı varsayılan olarak `.local/agent_memory.sqlite3` yolundadır ve Git
+tarafından yok sayılır; `AGENT_MEMORY_DB_PATH` ile değiştirilebilir. API anahtarı,
+parola veya benzeri gizli bilgileri belleğe kaydetmeyin. Komut, yaygın gizli
+bilgi etiketlerini reddeder; genel amaçlı gizli bilgi tarayıcısı değildir.
+
+## Gözlemlenebilirlik (Faz 13)
+
+Agent görevlerinde `--trace` kullanıldığında her görev için yapılandırılmış JSON
+olayları standart hata akışına yazılır. Olaylar `task_id`, `trace_id`, sıra,
+zaman damgası, agent geçişleri, model ve araç süreleri, token sayıları, retry
+sayısı ve hata türlerini içerir. Prompt, model cevabı, araç argümanları ve araç
+çıktıları iz kayıtlarına alınmaz. İz başına en fazla 200 olay tutulur.
+
+```powershell
+.venv\Scripts\python.exe -m app.main --agent --supervisor --trace --prompt "3+44 işlemini hesapla"
+```

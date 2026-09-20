@@ -904,56 +904,9 @@ SQLite
 
 kullan.
 
-Daha sonra:
-
-```text
-Qdrant
-```
-
-eklenebilir.
-
-Vector DB'yi ilk günden eklemek zorunlu değildir.
-
 ---
 
-# 20. Faz 12 — RAG
-
-Agent architecture oturduktan sonra RAG ekle.
-
-Pipeline:
-
-```text
-Documents
-    |
-    v
-Chunking
-    |
-    v
-Embedding
-    |
-    v
-Vector DB
-    |
-    v
-Retriever Tool
-    |
-    v
-Agent
-```
-
-Retriever bir tool olarak tasarlanmalıdır.
-
-Örneğin:
-
-```python
-search_knowledge_base(query="...")
-```
-
-Agent gerekli gördüğünde çağırmalıdır.
-
----
-
-# 21. Faz 13 — LangGraph versiyonu
+# 20. Faz 12 — LangGraph versiyonu
 
 Kendi orchestration sistemimiz tamamlandıktan sonra aynı mimari LangGraph ile kurulacak.
 
@@ -995,7 +948,7 @@ Bu aşamada kendi geliştirdiğimiz loop ile LangGraph karşılaştırılacak.
 
 ---
 
-# 22. Faz 14 — Observability
+# 21. Faz 13 — Observability
 
 Agent sistemi debug edilmesi zor sistemlerden biridir.
 
@@ -1009,33 +962,32 @@ Her adım loglanmalıdır.
   "agent": "coder",
   "event": "tool_call",
   "tool": "file_write",
-  "arguments": {
-    "path": "workspace/main.py"
-  }
+  "success": true,
+  "duration_ms": 3.5
 }
 ```
 
 Loglanacaklar:
 
-- user request
+- request uzunluğu
 - selected agent
-- prompt
-- model response
-- tool call
-- tool result
+- prompt uzunluğu
+- model response uzunluğu
+- tool call adı ve başarılı/başarısız sonucu
 - latency
 - token sayısı
 - retry sayısı
 - hata
-- final answer
+- görev tamamlandı/tamamlanmadı durumu
 
 NOT:
 
-Secret ve password'ler loglanmamalı.
+Secret ve password'ler loglanmamalı; ham prompt, cevap, araç argümanları ve
+araç çıktıları iz olaylarına alınmamalı.
 
 ---
 
-# 23. Trace sistemi
+# 22. Trace sistemi
 
 Bir task aşağıdaki gibi görülebilmeli:
 
@@ -1063,7 +1015,7 @@ Her node için süre ölç.
 
 ---
 
-# 24. Faz 15 — Error Handling
+# 23. Faz 14 — Error Handling
 
 Her tool standart bir sonuç döndürmeli.
 
@@ -1093,7 +1045,7 @@ Desteklenecek durumlar:
 
 ---
 
-# 25. Faz 16 — Human-in-the-loop
+# 24. Faz 15 — Human-in-the-loop
 
 Bazı tool çağrıları kullanıcı onayı gerektirmelidir.
 
@@ -1127,7 +1079,7 @@ requires_approval = True
 
 ---
 
-# 26. Faz 17 — Security
+# 25. Faz 16 — Security
 
 Agent sisteminin en kritik konularından biridir.
 
@@ -1173,7 +1125,7 @@ benzeri içerik komut değil, veri olarak değerlendirilmelidir.
 
 ---
 
-# 27. Faz 18 — Testing
+# 26. Faz 17 — Testing
 
 ## Unit Test
 
@@ -1223,7 +1175,7 @@ Supervisor
 
 ---
 
-# 28. Faz 19 — Evaluation
+# 27. Faz 18 — Evaluation
 
 Agent sistemi "çalıştı" diye başarılı sayılmamalıdır.
 
@@ -1257,7 +1209,7 @@ Test dataset oluştur.
 
 ---
 
-# 29. Faz 20 — Context yönetimi
+# 28. Faz 19 — Context yönetimi
 
 Multi-agent sistemlerde context hızla büyür.
 
@@ -1300,7 +1252,7 @@ Bu yaklaşım:
 
 ---
 
-# 30. Context compression
+# 29. Context compression
 
 Conversation büyüdüğünde eski mesajları özetle.
 
@@ -1320,7 +1272,7 @@ Ancak kritik tool sonuçları kaybolmamalıdır.
 
 ---
 
-# 31. Faz 21 — Model stratejisi
+# 30. Faz 20 — Model stratejisi
 
 İlk sürüm:
 
@@ -1345,7 +1297,7 @@ RTX 4060 Ti 16 GB için aynı anda birden fazla büyük modeli VRAM'e yüklemekt
 
 ---
 
-# 32. Faz 22 — Async execution
+# 31. Faz 21 — Async execution
 
 Bağımsız sub-task'lar paralel çalışabilir.
 
@@ -1378,7 +1330,7 @@ gibi.
 
 ---
 
-# 33. Faz 23 — Queue
+# 32. Faz 22 — Queue
 
 Daha ileri aşamada task queue eklenebilir.
 
@@ -1393,7 +1345,7 @@ Daha ileri aşamada task queue eklenebilir.
 
 ---
 
-# 34. Faz 24 — API
+# 33. Faz 23 — API
 
 Core sistem stabil olduktan sonra FastAPI ekle.
 
@@ -1423,7 +1375,7 @@ Response:
 
 ---
 
-# 35. Faz 25 — Streaming
+# 34. Faz 24 — Streaming
 
 Agent'ın yaptığı işlemleri UI tarafında göstermek için event streaming eklenebilir.
 
@@ -1445,7 +1397,7 @@ Teknik seçenek:
 
 ---
 
-# 36. Faz 26 — Basit UI
+# 35. Faz 25 — Basit UI
 
 İlk backend bittikten sonra küçük bir arayüz ekle.
 
@@ -1467,7 +1419,7 @@ Final Answer
 
 ---
 
-# 37. İlk gerçek demo senaryosu
+# 36. İlk gerçek demo senaryosu
 
 Sistemin ilk güçlü demosu:
 
@@ -1509,7 +1461,7 @@ Bu demo tamamlandığında sistem gerçek anlamda multi-agent davranışı göst
 
 ---
 
-# 38. İkinci demo — Coding Agent
+# 37. İkinci demo — Coding Agent
 
 Kullanıcı:
 
@@ -1549,7 +1501,7 @@ Bu yapı Codex benzeri agent davranışının temelini oluşturur.
 
 ---
 
-# 39. İlk sürümde YAPILMAYACAKLAR
+# 38. İlk sürümde YAPILMAYACAKLAR
 
 Scope'u kontrol etmek için ilk MVP'de bunları yapma:
 
@@ -1569,7 +1521,7 @@ Scope'u kontrol etmek için ilk MVP'de bunları yapma:
 
 ---
 
-# 40. Geliştirme sırası
+# 39. Geliştirme sırası
 
 Projeyi tam olarak şu sırayla geliştir:
 
@@ -1592,12 +1544,11 @@ Projeyi tam olarak şu sırayla geliştir:
 16. Logging
 17. Security
 18. Tests
-19. LangGraph
-20. Memory
-21. RAG
-22. FastAPI
-23. UI
-24. Evaluation
+19. Memory
+20. LangGraph
+21. FastAPI
+22. UI
+23. Evaluation
 ```
 
 Bu sıra önemlidir.
@@ -1606,7 +1557,7 @@ Direkt multi-agent ile başlanmamalıdır.
 
 ---
 
-# 41. Milestone 1 — Local LLM
+# 40. Milestone 1 — Local LLM
 
 Tamamlanmış sayılması için:
 
@@ -1618,7 +1569,7 @@ Tamamlanmış sayılması için:
 
 ---
 
-# 42. Milestone 2 — Tool Calling Agent
+# 41. Milestone 2 — Tool Calling Agent
 
 Tamamlanmış sayılması için:
 
@@ -1631,7 +1582,7 @@ Tamamlanmış sayılması için:
 
 ---
 
-# 43. Milestone 3 — Multi-Agent
+# 42. Milestone 3 — Multi-Agent
 
 Tamamlanmış sayılması için:
 
@@ -1644,7 +1595,7 @@ Tamamlanmış sayılması için:
 
 ---
 
-# 44. Milestone 4 — Production-like
+# 43. Milestone 4 — Production-like
 
 Tamamlanmış sayılması için:
 
@@ -1661,7 +1612,7 @@ Tamamlanmış sayılması için:
 
 ---
 
-# 45. Mimari prensipler
+# 44. Mimari prensipler
 
 Projede aşağıdaki prensiplerden sapma.
 
@@ -1732,7 +1683,7 @@ sorularına cevap verebilmeliyiz.
 
 ---
 
-# 46. Codex için çalışma yaklaşımı
+# 45. Codex için çalışma yaklaşımı
 
 Codex projeyi tek seferde yazmamalıdır.
 
@@ -1763,7 +1714,7 @@ Bir faz tamamlanmadan sonraki faza geçilmemelidir.
 
 ---
 
-# 47. İlk Codex görevi
+# 46. İlk Codex görevi
 
 İlk görev olarak şunu ver:
 
@@ -1787,7 +1738,7 @@ Requirements:
 
 ---
 
-# 48. İkinci Codex görevi
+# 47. İkinci Codex görevi
 
 ```text
 Implement Phase 2 and Phase 3.
@@ -1812,7 +1763,7 @@ Do not implement multi-agent orchestration yet.
 
 ---
 
-# 49. Üçüncü Codex görevi
+# 48. Üçüncü Codex görevi
 
 ```text
 Implement Phase 4.
@@ -1833,7 +1784,7 @@ Add integration tests.
 
 ---
 
-# 50. Dördüncü Codex görevi
+# 49. Dördüncü Codex görevi
 
 ```text
 Implement Supervisor + sub-agent architecture.
@@ -1859,7 +1810,7 @@ Do not add LangGraph yet.
 
 ---
 
-# 51. Beşinci Codex görevi
+# 50. Beşinci Codex görevi
 
 ```text
 Add observability and evaluation.
@@ -1879,7 +1830,7 @@ Never log secrets.
 
 ---
 
-# 52. Altıncı Codex görevi
+# 51. Altıncı Codex görevi
 
 ```text
 Reimplement the orchestration layer using LangGraph.
@@ -1900,7 +1851,7 @@ Keep the original custom orchestration implementation for comparison.
 
 ---
 
-# 53. Proje sonunda öğrenmiş olman gerekenler
+# 52. Proje sonunda öğrenmiş olman gerekenler
 
 Bu proje tamamlandığında aşağıdaki sorulara kod seviyesinde cevap verebilmelisin:
 
@@ -1927,7 +1878,7 @@ Bu proje tamamlandığında aşağıdaki sorulara kod seviyesinde cevap verebilm
 
 ---
 
-# 54. Nihai hedef mimari
+# 53. Nihai hedef mimari
 
 ```text
                          USER
@@ -1951,10 +1902,10 @@ Bu proje tamamlandığında aşağıdaki sorulara kod seviyesinde cevap verebilm
                    v               v
                TOOL REGISTRY     MEMORY
                    |
-          +--------+--------+---------+
-          |        |        |         |
-          v        v        v         v
-        FILE     PYTHON   SEARCH     RAG
+          +--------+--------+
+          |        |        |
+          v        v        v
+        FILE     PYTHON   SEARCH
           |
           v
        SANDBOX

@@ -73,9 +73,9 @@ LLM
 -> supervisor
 -> sub-agents
 -> reviewer
--> observability
+-> memory
 -> LangGraph
--> memory / RAG
+-> observability
 ```
 
 Direkt karmaşık multi-agent framework kodu yazma.

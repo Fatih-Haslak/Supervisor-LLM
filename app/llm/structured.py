@@ -7,6 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
 from app.llm.client import LLMClient
 from app.llm.schemas import ChatMessage
+from app.observability.events import record
 
 
 class UseToolDecision(BaseModel):
@@ -64,6 +65,7 @@ class StructuredDecisionClient:
             try:
                 return parse_decision(response.content)
             except ValidationError as exc:
+                record("model_retry", retry_count=attempt + 1)
                 if attempt == self._max_retries:
                     raise StructuredOutputError(
                         f"Model returned invalid structured output after {attempt + 1} attempts"

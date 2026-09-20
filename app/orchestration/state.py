@@ -1,10 +1,11 @@
 """The task state passed between future supervisor and worker agents."""
 
-from uuid import uuid4
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.llm.schemas import ChatMessage
+from app.observability.events import current_task_id
 from app.tools.base import ToolResult
 
 
@@ -48,8 +49,22 @@ class TaskPlan(BaseModel):
         return self
 
 
+class RoutingRecord(BaseModel):
+    suggested_agent: str
+    confidence: float = Field(ge=0, le=1)
+    selected_agent: str
+
+
+class ReviewRecord(BaseModel):
+    agent: str
+    task: str
+    attempt: int = Field(ge=1)
+    status: Literal["pass", "fail"]
+    issues: list[str] = Field(default_factory=list)
+
+
 class AgentState(BaseModel):
-    task_id: str = Field(default_factory=lambda: uuid4().hex)
+    task_id: str = Field(default_factory=current_task_id)
     user_request: str = Field(min_length=1)
     messages: list[ChatMessage] = Field(default_factory=list)
     current_agent: str | None = None
@@ -58,6 +73,8 @@ class AgentState(BaseModel):
     tool_results: list[ToolCallRecord] = Field(default_factory=list)
     agent_outputs: list[AgentOutput] = Field(default_factory=list)
     plan: TaskPlan | None = None
+    route: RoutingRecord | None = None
+    reviews: list[ReviewRecord] = Field(default_factory=list)
     final_answer: str | None = None
     step_count: int = Field(default=0, ge=0)
 
@@ -77,4 +94,9 @@ class AgentState(BaseModel):
         self.final_answer = answer
         self.completed_tasks.extend(self.pending_tasks)
         self.pending_tasks.clear()
+        self.current_agent = None
+
+    def fail(self, answer: str) -> None:
+        """Finish with pending work preserved for an honest failure report."""
+        self.final_answer = answer
         self.current_agent = None

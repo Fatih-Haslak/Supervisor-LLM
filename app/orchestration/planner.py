@@ -8,6 +8,7 @@ from pydantic import ValidationError
 from app.llm.client import LLMClient
 from app.llm.schemas import ChatMessage
 from app.llm.structured import StructuredOutputError
+from app.observability.events import record
 from app.orchestration.state import TaskPlan
 
 
@@ -45,7 +46,9 @@ class Planner:
                     "For a simple request use one task. Do not plan web search; "
                     "researcher can search only local workspace documents. "
                     "Use coder for Python code implementation and file_agent for "
-                    "ordinary file operations. Return only the JSON object."
+                    "ordinary file operations. Coder can create Python files itself; "
+                    "do not add a separate file_agent task just to create a Python file. "
+                    "Return only the JSON object."
                 ),
             ),
             ChatMessage(role="user", content=request),
@@ -58,6 +61,7 @@ class Planner:
                     raise ValueError("Plan selected an unavailable agent")
                 return plan
             except (ValidationError, ValueError) as exc:
+                record("model_retry", agent="planner", retry_count=attempt + 1)
                 if attempt == self._max_retries:
                     raise StructuredOutputError(
                         f"Planner returned an invalid plan after {attempt + 1} attempts"

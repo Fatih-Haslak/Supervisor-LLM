@@ -1,8 +1,10 @@
 """Registry that exposes and executes only explicitly allowed tools."""
 
 from collections.abc import Collection, Mapping
+from time import perf_counter
 from typing import Any
 
+from app.observability.events import record
 from app.tools.base import BaseTool, ToolResult, ToolSpec
 
 
@@ -25,9 +27,26 @@ class ToolRegistry:
     async def execute(
         self, name: str, arguments: Mapping[str, object], allowed_tools: Collection[str]
     ) -> ToolResult:
-        if name not in allowed_tools:
-            return ToolResult.fail("PermissionDenied", "Tool is not allowed for this caller")
-        tool = self._tools.get(name)
-        if tool is None:
-            return ToolResult.fail("UnknownTool", "Tool is not registered")
-        return await tool.run(arguments)
+        started = perf_counter()
+        try:
+            if name not in allowed_tools:
+                result = ToolResult.fail("PermissionDenied", "Tool is not allowed for this caller")
+            else:
+                tool = self._tools.get(name)
+                result = (
+                    ToolResult.fail("UnknownTool", "Tool is not registered")
+                    if tool is None else await tool.run(arguments)
+                )
+        except Exception as exc:
+            record(
+                "tool_call", tool=name, success=False,
+                duration_ms=round((perf_counter() - started) * 1000, 2),
+                error_type=type(exc).__name__,
+            )
+            raise
+        record(
+            "tool_call", tool=name, success=result.success,
+            duration_ms=round((perf_counter() - started) * 1000, 2),
+            error_type=result.error_type,
+        )
+        return result
