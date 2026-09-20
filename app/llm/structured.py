@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 from app.llm.client import LLMClient
 from app.llm.schemas import ChatMessage
 from app.observability.events import record
+from app.tools.base import ToolSpec
 
 
 class UseToolDecision(BaseModel):
@@ -30,6 +31,44 @@ AgentDecision = Annotated[
     Field(discriminator="action"),
 ]
 _decision_adapter: TypeAdapter[AgentDecision] = TypeAdapter(AgentDecision)
+
+
+def decision_schema(tools: Sequence[ToolSpec]) -> dict[str, object]:
+    """Constrain each tool call to its actual arguments in local-model decoding."""
+    def compact(value: object) -> object:
+        if isinstance(value, dict):
+            # llama.cpp grammar expands maxLength into thousands of rules for
+            # file content and can overflow its sampler stack. Pydantic still
+            # enforces these bounds when the tool executes.
+            return {
+                key: compact(item) for key, item in value.items()
+                if key not in {"maxLength", "title", "description", "default"}
+            }
+        if isinstance(value, list):
+            return [compact(item) for item in value]
+        return value
+
+    choices: list[dict[str, object]] = [{
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "action": {"const": "final_answer"},
+            "answer": {"type": "string", "minLength": 1},
+        },
+        "required": ["action", "answer"],
+    }]
+    for tool in tools:
+        choices.append({
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "action": {"const": "use_tool"},
+                "tool": {"const": tool.name},
+                "arguments": compact(tool.parameters),
+            },
+            "required": ["action", "tool", "arguments"],
+        })
+    return {"oneOf": choices}
 
 DECISION_INSTRUCTIONS = (
     "Return exactly one JSON object and no markdown. "
@@ -55,12 +94,13 @@ class StructuredDecisionClient:
         self._max_retries = max_retries
 
     async def decide(
-        self, messages: Sequence[ChatMessage]
+        self, messages: Sequence[ChatMessage], *, tools: Sequence[ToolSpec] | None = None
     ) -> UseToolDecision | FinalAnswerDecision:
         request = [ChatMessage(role="system", content=DECISION_INSTRUCTIONS), *messages]
+        schema = decision_schema(tools) if tools is not None else _decision_adapter.json_schema()
         for attempt in range(self._max_retries + 1):
             response = await self._llm.chat(
-                request, json_schema=_decision_adapter.json_schema()
+                request, json_schema=schema
             )
             try:
                 return parse_decision(response.content)

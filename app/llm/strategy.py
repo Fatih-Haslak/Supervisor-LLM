@@ -7,7 +7,7 @@ from app.llm.client import LLMClient
 
 ModelRole = Literal[
     "chat", "single", "supervisor", "planner", "router", "reviewer",
-    "general", "researcher", "coder", "file_agent",
+    "general", "researcher", "coder", "file_agent", "data_agent", "writer",
 ]
 
 

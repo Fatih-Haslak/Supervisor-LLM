@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Yerel Agent Çalışma Masası</title>
+  <link rel="stylesheet" href="/ui/style.css">
+  <script src="/ui/app.js" defer></script>
+</head>
+<body>
+  <div class="shell">
+    <header class="topbar">
+      <div class="brand"><span class="brand-mark" aria-hidden="true">◎</span><span>Yerel Agent</span></div>
+      <span class="local-label">Bu bilgisayarda çalışıyor</span>
+    </header>
+
+    <main>
+      <section class="intro" aria-labelledby="page-title">
+        <h1 id="page-title">Görevi ver. Akışı izle.</h1>
+        <p>Tek yerel model, göreve göre farklı roller üstlenir. Ana çalışma biçimi planlı supervisor'dır.</p>
+        <p class="architecture">Sen → Supervisor → Uzman agent + araçlar → Reviewer → Tek yanıt</p>
+      </section>
+
+      <div class="layout">
+        <section class="composer" aria-labelledby="task-heading">
+          <h2 id="task-heading">Yeni görev</h2>
+          <form id="task-form">
+            <label for="task-message">Ne yapılmasını istiyorsun?</label>
+            <textarea id="task-message" name="message" maxlength="6000" rows="7" required placeholder="workspace içindeki bir belgeyi incele ve bulguları özetle"></textarea>
+            <p class="default-mode">Önerilen varsayılan: <strong>Genel (planlı supervisor)</strong></p>
+            <details class="advanced-mode">
+              <summary>Gelişmiş çalışma biçimleri</summary>
+              <label for="task-mode">Yürütme biçimi</label>
+              <select id="task-mode" name="mode" aria-describedby="mode-description">
+                <option value="plan">Genel · Planlı supervisor</option>
+                <option value="supervisor">Supervisor · Anlık delege etme</option>
+                <option value="router">Router · Basit işlerde hızlı yönlendirme</option>
+                <option value="single">Tek agent · Tek döngü</option>
+                <option value="graph">LangGraph · Alternatif akış motoru</option>
+              </select>
+              <p id="mode-description">Görevi adımlara ayırır, uzman agent'lara verir ve yazılan dosyaları reviewer ile kontrol eder.</p>
+            </details>
+            <button id="run-button" type="submit">Görevi başlat</button>
+          </form>
+          <p class="note">Dosya yazma isteği çıkarsa işlem durur ve onayınızı bekler.</p>
+        </section>
+
+        <section class="monitor" aria-labelledby="monitor-heading">
+          <div class="monitor-heading">
+            <div><h2 id="monitor-heading">Çalışma akışı</h2><p id="task-id">Henüz görev yok</p></div>
+            <span id="status" class="status" aria-live="polite">Hazır</span>
+          </div>
+          <p id="ui-error" class="error" role="alert" hidden></p>
+          <section id="approval" class="approval" aria-labelledby="approval-heading" hidden>
+            <h3 id="approval-heading">Dosya işlemi onay bekliyor</h3>
+            <p>Aracın yapacağı işlem aşağıda. Onay verirseniz işlem yürütülür.</p>
+            <pre id="approval-preview"></pre>
+            <div class="approval-actions">
+              <button id="approve-button" type="button">Onayla</button>
+              <button id="deny-button" type="button" class="secondary">Reddet</button>
+            </div>
+          </section>
+          <ol id="timeline" class="timeline" aria-label="Agent olayları"><li class="empty">Görevi başlatınca olaylar burada görünecek.</li></ol>
+          <section class="results" aria-labelledby="agents-heading">
+            <h3 id="agents-heading">Plan ve agent çıktıları</h3>
+            <div id="agents" class="result-list"><p class="empty">Henüz agent çıktısı yok.</p></div>
+          </section>
+          <section class="results" aria-labelledby="results-heading">
+            <h3 id="results-heading">Araç çağrıları ve sonuçları</h3>
+            <div id="tools" class="result-list"><p class="empty">Henüz araç kullanılmadı.</p></div>
+          </section>
+          <section class="results" aria-labelledby="reviews-heading">
+            <h3 id="reviews-heading">İnceleme</h3>
+            <div id="reviews" class="result-list"><p class="empty">Henüz inceleme yok.</p></div>
+          </section>
+          <section class="answer" aria-labelledby="answer-heading">
+            <h3 id="answer-heading">Son yanıt</h3>
+            <p id="answer-text" class="empty">Görev tamamlandığında burada görünecek.</p>
+          </section>
+        </section>
+      </div>
+    </main>
+  </div>
+</body>
+</html>

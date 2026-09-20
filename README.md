@@ -1,9 +1,29 @@
 # Local LLM Agent System
 
-Bu depo, `yapilacaklar.md` yol haritasının **Faz 0–20** uygulamasıdır.
+Bu depo, `yapilacaklar.md` yol haritasının **Faz 0–25** uygulamasıdır.
 GGUF modeli Python sürecinde doğrudan yüklenir; LM Studio sunucusu ve API token
 gerekmez. Tek agent döngüsü, görev başına merkezi `AgentState`, supervisor
 yönlendirmesi ve uzman worker'lar vardır.
+
+## Hangi çalışma biçimini kullanmalıyım?
+
+Arayüzün varsayılanı **Genel (planlı supervisor)**. Hedef mimarinin ana yoludur:
+
+```text
+Kullanıcı → Supervisor/Planner → uzman agent → araçlar → Reviewer → tek yanıt
+                         └──────────── tek yerel GGUF modeli ────────────┘
+```
+
+Diğer çalışma biçimleri aynı model, araçlar ve worker'lar üzerinde farklı
+yönlendirme yollarını karşılaştırmak içindir. `Supervisor` adımları planlamadan
+anlık delege eder; `Router` basit görevleri tek worker'a gönderir; `Tek agent`
+uzmanlar arasında delege etmez; `LangGraph` benzer supervisor akışını bir grafik
+motorunda yürütür. Arayüzde bunlar gelişmiş seçenekler altında bulunur.
+
+İlk satış demosu `data_agent → writer → reviewer` zinciriyle gerçek yerel modelde
+çalıştırıldı. Reviewer rapor sayılarını kaynak CSV'den yeniden hesaplar. Kod
+demosu için `function_test`, tek bir saf aritmetik fonksiyonu JSON test vakalarıyla
+değerlendirir; genel Python projesi veya `pytest` çalıştırıcısı değildir.
 
 ## Kurulum
 
@@ -13,7 +33,7 @@ NVIDIA GPU için `llama-cpp-python` CUDA wheel kurulmalıdır. Windows PowerShel
 ```powershell
 uv venv --python 3.12 .venv
 uv pip install --python .venv\Scripts\python.exe --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cu130 llama-cpp-python
-uv pip install -e '.[dev,download,graph]'
+uv pip install -e '.[dev,download,graph,api]'
 ```
 
 Başlangıç modeli, Qwen'in [Qwen3-8B-GGUF](https://huggingface.co/Qwen/Qwen3-8B-GGUF)
@@ -92,10 +112,13 @@ dosyasıyla test edilir.
 
 `StructuredDecisionClient`, modelden `final_answer` veya `use_tool` kararını
 llama.cpp JSON şemasıyla ister. Bu, modelin `{}` gibi geçersiz kararlar
-üretmesini sınırlar. Pydantic geçersiz yanıtı reddeder; en fazla iki kez
+üretmesini sınırlar. Araç kararı her aracın gerçek argüman şemasıyla kısıtlanır;
+böylece yerel model serbest JSON alanlarını sonsuza dek üretmez. Pydantic
+geçersiz yanıtı reddeder; en fazla iki kez
 yeniden deneme yapılır. `ToolRegistry`, aracı yalnızca çağıranın açık izin
 listesindeyse gösterir ve çalıştırır. Mevcut araçlar: `calculator`, `file_read`,
-`file_write`, `directory_list`, isteğe bağlı `python_exec`.
+`file_write`, `directory_list`, `csv_summary`, `function_test`, isteğe bağlı
+`python_exec`.
 
 Dosya araçları sadece `workspace/` altında çalışır. `file_write` mevcut dosyayı
 ancak `overwrite=true` verilirse değiştirir. Araç yolları `note.txt` veya
@@ -104,13 +127,16 @@ Tool sonuçları ortak `ToolResult`
 şemasına döner. `SingleAgent` model kararını alır, izinli aracı çalıştırır,
 sonucu modele geri verir ve son cevabı üretir. Döngü en fazla 10 adım ve
 8 araç çağrısı sürer.
+Tekrarlanan `PermissionDenied` iki çağrıdan sonra `TOOL_FAILURE` ile durur;
+başarısız görevin araç çağrıları API'de korunur.
 
 Her görev `AgentState` içinde benzersiz görev kimliği, mesajlar, mevcut agent,
 bekleyen/tamamlanan görevler, worker çıktıları, araç sonuçları, adım sayısı ve
 son cevabı tutar. Supervisor yapılandırılmış JSON kararıyla görevi izinli
 worker'a verir, çıktısını state'e işler ve son cevabı üretir. En fazla altı tur
 çalışır. `general` basit ve karma görevleri; `researcher` yerel belge aramasını;
-`coder` workspace içi Python kodunu; `file_agent` dosya yönetimini üstlenir.
+`coder` workspace içi Python kodunu ve sınırlı fonksiyon testlerini; `file_agent`
+dosya yönetimini; `data_agent` CSV analizini; `writer` Markdown raporunu üstlenir.
 Hepsi aynı GGUF model örneğini kullanır, fakat prompt ve araç izinleri ayrıdır.
 `researcher` yazamaz; `file_agent` kod çalıştıramaz. `python_exec` sadece
 `--allow-python` ile `general` ve `coder` rollerine açılır.
@@ -133,10 +159,12 @@ sıralı iş tarif ediyorsa planlı supervisor çalışır. `--show-tools` rota 
 kullanılan araçları gösterir. Böylece basit hesaplarda supervisor'ın ek model
 çağrıları yapılmaz.
 
-Supervisor, Coder çıktısını ayrıca read-only Reviewer'a gönderir. Reviewer
+Supervisor, Coder ve Writer çıktılarını ayrıca read-only Reviewer'a gönderir. Reviewer
 yazılan workspace dosyasını `file_read` ile yeniden okur, Python dosyalarında
 sözdizimini kodu çalıştırmadan kontrol eder ve yapılandırılmış `pass/fail`
-kararı üretir. Geçmezse sorunları Coder'a iletir; en fazla iki düzeltme denemesi
+kararı üretir. `function_test` sonucu varsa testleri yeniden değerlendirir;
+`csv_summary` sonucu varsa raporun beş sayısını kaynak CSV'den yeniden hesaplar.
+Geçmezse sorunları ilgili worker'a iletir; en fazla iki düzeltme denemesi
 yapar. Son deneme de başarısızsa görev tamamlanmış sayılmaz ve bağımlı görevler
 çalıştırılmaz. `--show-tools` inceleme sonucunu gösterir. `--router` ile seçilen
 Coder görevleri de inceleme için planlı supervisor yoluna gider.
@@ -248,3 +276,55 @@ aynı anda birden fazla büyük model tutmaz. Worker fabrikası rol bazlı istem
 seçebilecek arayüze sahiptir; varsayılan çalıştırma yalnızca tek modeli kullanır.
 İleride farklı modeller atanırsa yükleme ve VRAM boşaltma politikasının ayrıca
 tanımlanması gerekir. Faz 21'deki eşzamanlı yürütme bu fazın kapsamına girmez.
+
+## Eşzamanlı çalışma ve kuyruk (Faz 21–22)
+
+Planlı supervisor, birbirine bağımlı olmayan ardışık `researcher` görevlerini
+en fazla iki worker ile eşzamanlı çalıştırır. Sonuçları plan sırasıyla
+`AgentState` içine kaydeder. Dosya yazabilen worker'lar sıralı çalışır; tek
+yerel modelin çağrıları yine istemci kilidiyle sıraya alınır.
+
+HTTP servisi en fazla sekiz bekleyen görev içeren, bellekte tutulan bir kuyruk
+kullanır. Aynı anda bir kullanıcı görevi yürütülür; en fazla 100 görev kaydı
+tutulur. Sunucu yeniden başlayınca görev kayıtları kaybolur. Redis, Celery ve
+kalıcı dağıtık kuyruk bu yerel sürümde kullanılmaz.
+
+## Yerel API, olay akışı ve arayüz (Faz 23–25)
+
+```powershell
+.venv\Scripts\python.exe -m app.api --port 8000
+```
+
+Tarayıcıda `http://127.0.0.1:8000/` adresini açın. Arayüz kullanıcı görevini,
+agent olaylarını, model süresini/token sayılarını, araç çağrılarını ve
+sonuçlarını, inceleme kararlarını ve son yanıtı gösterir. Dosya yazma işlemi
+olursa doğrulanmış araç argümanları gösterilir; açık onay veya ret beklenir.
+Onay 300 saniye içinde gelmezse işlem reddedilir.
+
+İki örnek giriş:
+
+```text
+workspace/sales.csv dosyasındaki amount sütununu analiz et; kısa bulgular ve
+tüm metriklerle workspace/sales_report.md raporunu yaz ve doğrula.
+
+workspace/buggy_math.py içindeki add hatasını düzelt;
+workspace/buggy_math_tests.json vakalarını function_test ile çalıştır ve doğrula.
+```
+
+`examples/` altındaki örnek CSV, Python dosyası ve JSON test vakalarını önce
+`workspace/` içine kopyalayın. Arayüzde çalışma biçimini değiştirmeniz gerekmez.
+
+API uç noktaları: `POST /tasks`, `GET /tasks/{task_id}`,
+`GET /tasks/{task_id}/events` (SSE) ve
+`POST /tasks/{task_id}/approval`. İstek örneği:
+
+```json
+{"message":"3+44 işlemini hesapla","mode":"single"}
+```
+
+`mode` için `single`, `supervisor`, `plan`, `router` veya `graph` seçilebilir;
+varsayılan `plan`dır. API ve UI yalnızca loopback bağlantılarına açıktır;
+sunucu `127.0.0.1` adresine bağlanır. Bu sürümde çok kullanıcılı yetkilendirme
+yoktur; internete açmayın. SSE, olay meta verilerinin yanında yerel görev
+anlık görüntüsünü de gönderir; bu görüntü araç argümanlarını ve sonuçlarını
+içerir. API modunda kısıtlı Python aracı kapalıdır.

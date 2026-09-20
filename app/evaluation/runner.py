@@ -29,7 +29,9 @@ from app.observability.events import TraceRecorder, record, trace_session
 from app.observability.llm import TracedLLM
 from app.orchestration.state import AgentState
 from app.tools.calculator import CalculatorTool
+from app.tools.csv_analysis import CsvSummaryTool
 from app.tools.filesystem import DirectoryListTool, FileReadTool, FileWriteTool, Workspace
+from app.tools.function_test import FunctionTestTool
 from app.tools.registry import ToolRegistry
 from app.tools.search import SearchTool
 
@@ -47,7 +49,8 @@ def make_registry(root: Path) -> ToolRegistry:
     workspace = Workspace(root)
     registry = ToolRegistry()
     for tool in (
-        CalculatorTool(), FileReadTool(workspace), FileWriteTool(workspace),
+        CalculatorTool(), CsvSummaryTool(workspace), FunctionTestTool(workspace),
+        FileReadTool(workspace), FileWriteTool(workspace),
         DirectoryListTool(workspace), SearchTool(workspace),
     ):
         registry.register(tool)

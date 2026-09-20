@@ -34,12 +34,16 @@ WORKER_POLICIES: dict[ModelRole, WorkerPolicy] = {
         allowed_tools=frozenset({"search", "file_read"}),
     ),
     "coder": WorkerPolicy(
-        description="Inspect, write, and revise Python code inside workspace.",
+        description="Inspect, revise, and test small Python functions inside workspace.",
         instructions=(
-            "Inspect the target files before editing. Explain the actual changes. "
-            "Do not claim tests were run unless python_exec returned a result."
+            "Inspect the target code and JSON test cases before editing. "
+            "After the change, call function_test with the code and test paths. "
+            "Report exact pass/fail counts. The function_test tool supports only "
+            "one pure arithmetic function; state its limitation honestly."
         ),
-        allowed_tools=frozenset({"file_read", "file_write", "directory_list"}),
+        allowed_tools=frozenset({
+            "file_read", "file_write", "directory_list", "function_test"
+        }),
     ),
     "file_agent": WorkerPolicy(
         description="Find, read, and write ordinary workspace files; not code implementation.",
@@ -48,6 +52,26 @@ WORKER_POLICIES: dict[ModelRole, WorkerPolicy] = {
             "For code implementation, tell supervisor that coder is the appropriate role."
         ),
         allowed_tools=frozenset({"file_read", "file_write", "directory_list"}),
+    ),
+    "data_agent": WorkerPolicy(
+        description="Analyze numeric data in local CSV files with deterministic tools.",
+        instructions=(
+            "For CSV analysis, call csv_summary with the exact workspace path and numeric "
+            "column. Preserve every returned count, total, average, minimum and maximum "
+            "exactly in your answer, including the source path. Never invent metrics."
+        ),
+        allowed_tools=frozenset({"file_read", "csv_summary"}),
+    ),
+    "writer": WorkerPolicy(
+        description="Write Markdown reports from completed analysis inside workspace.",
+        instructions=(
+            "file_write ile istenen Markdown raporunu yaz. Kısa bir bulgular paragrafı "
+            "ve sayısal tablo ekle. Tablo örneği: | Ölçüt | Değer |, "
+            "| Satır sayısı | 4 |, | Toplam | 500 |, | Ortalama | 125 |, "
+            "| En düşük | 80 |, | En yüksek | 200 |. Örnekteki rakamları kopyalama; "
+            "data_agent sonuçlarını birebir kullan. Yeni rakam uydurma."
+        ),
+        allowed_tools=frozenset({"file_read", "file_write"}),
     ),
 }
 

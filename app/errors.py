@@ -5,7 +5,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, ValidationError
 
-from app.agents.single import AgentLimitError
+from app.agents.single import AgentLimitError, RepeatedToolError
 from app.agents.supervisor import SupervisorLimitError
 from app.llm.client import LLMContextOverflowError, LLMError, LLMTimeoutError
 from app.llm.structured import StructuredOutputError
@@ -16,6 +16,7 @@ ErrorCode = Literal[
     "SUPERVISOR_LIMIT", "LLM_FAILURE", "INTERNAL_ERROR",
     "INVALID_INPUT", "STORAGE_FAILURE",
     "APPROVAL_REQUIRED", "APPROVAL_DENIED",
+    "TOOL_FAILURE",
 ]
 
 
@@ -28,6 +29,12 @@ class ErrorInfo(BaseModel):
 
 
 def describe_error(exc: Exception) -> ErrorInfo:
+    if isinstance(exc, RepeatedToolError):
+        return ErrorInfo(
+            code="TOOL_FAILURE",
+            message="Araç aynı hatayı tekrarladı; dosya yolunu ve araç izinlerini kontrol edin.",
+            retryable=False,
+        )
     if isinstance(exc, ToolApprovalError):
         if exc.kind == "ApprovalRequired":
             return ErrorInfo(

@@ -2,7 +2,9 @@
 
 import ast
 import json
+import re
 from collections.abc import Sequence
+from decimal import Decimal, InvalidOperation
 from typing import Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
@@ -12,7 +14,49 @@ from app.llm.schemas import ChatMessage
 from app.llm.structured import StructuredOutputError
 from app.observability.events import record
 from app.orchestration.state import ToolCallRecord
+from app.tools.csv_analysis import CsvSummary
 from app.tools.registry import ToolRegistry
+
+_METRIC_LABELS = {
+    "Satır sayısı": "count",
+    "Toplam": "total",
+    "Ortalama": "average",
+    "En düşük": "minimum",
+    "En yüksek": "maximum",
+}
+
+
+def _report_metric_issues(report: str, summary: CsvSummary) -> list[str]:
+    found: dict[str, Decimal] = {}
+    rows = [
+        [cell.strip() for cell in line.strip().strip("|").split("|")]
+        for line in report.splitlines() if "|" in line
+    ]
+    for cells in rows:
+        if len(cells) != 2 or cells[0] not in _METRIC_LABELS:
+            continue
+        value = cells[1].replace(",", ".")
+        if not re.fullmatch(r"-?\d+(?:\.\d+)?", value):
+            continue
+        found[_METRIC_LABELS[cells[0]]] = Decimal(value)
+    labels = list(_METRIC_LABELS)
+    for index, cells in enumerate(rows):
+        if cells != labels:
+            continue
+        values = rows[index + 2] if index + 2 < len(rows) else []
+        if len(values) == len(labels):
+            for label, value in zip(labels, values, strict=True):
+                value = value.replace(",", ".")
+                if re.fullmatch(r"-?\d+(?:\.\d+)?", value):
+                    found[_METRIC_LABELS[label]] = Decimal(value)
+    issues: list[str] = []
+    for label, key in _METRIC_LABELS.items():
+        expected = Decimal(str(getattr(summary, key)))
+        if key not in found:
+            issues.append(f"Raporda {label} sayısal tablo satırı eksik")
+        elif found[key] != expected:
+            issues.append(f"{label} kaynak CSV ile uyuşmuyor: beklenen {expected}")
+    return issues
 
 
 class WorkerResultLike(Protocol):
@@ -75,6 +119,7 @@ class ReviewerAgent:
             )
         read_calls: list[ToolCallRecord] = []
         files: list[dict[str, str]] = []
+        full_contents: dict[str, str] = {}
         for path in paths:
             result = await self._registry.execute("file_read", {"path": path}, {"file_read"})
             read_calls.append(
@@ -98,10 +143,106 @@ class ReviewerAgent:
                         ),
                         tool_calls=read_calls,
                     )
+            full_contents[path] = result.output
             content = result.output
             if len(content) > 1800:
                 content = content[:1400] + "\n[earlier content omitted]\n" + content[-400:]
             files.append({"path": path, "content": content})
+
+        verified_summary: CsvSummary | None = None
+        original_summary_call = next(
+            (call for call in reversed(tools)
+             if call.tool == "csv_summary" and call.result.success), None
+        )
+        report_file = next(
+            (item for item in files if item["path"].casefold().endswith(".md")), None
+        )
+        if original_summary_call is not None and report_file is not None:
+            recomputed = await self._registry.execute(
+                "csv_summary", original_summary_call.arguments, {"csv_summary"}
+            )
+            read_calls.append(ToolCallRecord(
+                tool="csv_summary", arguments=original_summary_call.arguments,
+                result=recomputed,
+            ))
+            if not recomputed.success or recomputed.output is None:
+                return ReviewResult(
+                    verdict=ReviewVerdict(status="fail", issues=[
+                        "Kaynak CSV yeniden hesaplanamadı"
+                    ]), tool_calls=read_calls,
+                )
+            try:
+                verified_summary = CsvSummary.model_validate_json(recomputed.output)
+                original = CsvSummary.model_validate_json(
+                    original_summary_call.result.output or ""
+                )
+            except (ValueError, InvalidOperation):
+                return ReviewResult(
+                    verdict=ReviewVerdict(status="fail", issues=[
+                        "CSV analiz sonucu doğrulanamadı"
+                    ]), tool_calls=read_calls,
+                )
+            if verified_summary != original:
+                return ReviewResult(
+                    verdict=ReviewVerdict(status="fail", issues=[
+                        "Kaynak CSV analizden sonra değişti"
+                    ]), tool_calls=read_calls,
+                )
+            issues = _report_metric_issues(
+                full_contents[report_file["path"]], verified_summary
+            )
+            if issues:
+                return ReviewResult(
+                    verdict=ReviewVerdict(status="fail", issues=issues[:5]),
+                    tool_calls=read_calls,
+                )
+
+        original_test_call = next(
+            (call for call in reversed(tools)
+             if call.tool == "function_test" and call.result.success), None
+        )
+        if original_test_call is not None:
+            retest = await self._registry.execute(
+                "function_test", original_test_call.arguments, {"function_test"}
+            )
+            read_calls.append(ToolCallRecord(
+                tool="function_test", arguments=original_test_call.arguments,
+                result=retest,
+            ))
+            if not retest.success or retest.output is None:
+                return ReviewResult(
+                    verdict=ReviewVerdict(status="fail", issues=[
+                        "Kod testleri yeniden çalıştırılamadı"
+                    ]), tool_calls=read_calls,
+                )
+            try:
+                original_test = json.loads(original_test_call.result.output or "")
+                verified_test = json.loads(retest.output)
+            except (ValueError, TypeError):
+                return ReviewResult(
+                    verdict=ReviewVerdict(status="fail", issues=[
+                        "Kod test sonucu doğrulanamadı"
+                    ]), tool_calls=read_calls,
+                )
+            if original_test != verified_test:
+                return ReviewResult(
+                    verdict=ReviewVerdict(status="fail", issues=[
+                        "Kod veya testler ilk çalıştırmadan sonra değişti"
+                    ]), tool_calls=read_calls,
+                )
+            if verified_test.get("passed") != verified_test.get("total"):
+                return ReviewResult(
+                    verdict=ReviewVerdict(status="fail", issues=[
+                        "Kod testlerinden bazıları başarısız"
+                    ]), tool_calls=read_calls,
+                )
+        elif (any(path.casefold().endswith(".py") for path in paths)
+              and "test" in (user_request + " " + task).casefold()):
+            return ReviewResult(
+                verdict=ReviewVerdict(status="fail", issues=[
+                    "Kod için istenen function_test sonuçları eksik"
+                ]), tool_calls=read_calls,
+            )
 
         evidence = {
             "user_request": user_request,
@@ -113,6 +254,12 @@ class ReviewerAgent:
                 for call in tools[-8:]
             ],
             "written_files": files,
+            "verified_csv_summary": (
+                verified_summary.model_dump() if verified_summary is not None else None
+            ),
+            "verified_function_tests": (
+                verified_test if original_test_call is not None else None
+            ),
         }
         messages = [
             ChatMessage(

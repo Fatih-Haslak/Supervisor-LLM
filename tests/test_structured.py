@@ -10,8 +10,11 @@ from app.llm.structured import (
     StructuredDecisionClient,
     StructuredOutputError,
     UseToolDecision,
+    decision_schema,
     parse_decision,
 )
+from app.tools.base import ToolSpec
+from app.tools.csv_analysis import CsvSummaryInput
 
 
 class FakeLLM:
@@ -45,6 +48,19 @@ def test_extra_or_missing_fields_are_rejected() -> None:
         parse_decision('{"action":"final_answer","answer":"ok","extra":1}')
     with pytest.raises(ValidationError):
         parse_decision('{"action":"use_tool","tool":"calculator"}')
+
+
+def test_tool_schema_limits_arguments_to_registered_input() -> None:
+    schema = decision_schema([ToolSpec(
+        name="csv_summary", description="Summarize CSV",
+        parameters=CsvSummaryInput.model_json_schema(),
+    )])
+    choices = schema["oneOf"]
+    assert isinstance(choices, list)
+    call = choices[1]
+    assert call["properties"]["tool"] == {"const": "csv_summary"}
+    assert call["properties"]["arguments"]["additionalProperties"] is False
+    assert set(call["properties"]["arguments"]["properties"]) == {"path", "column"}
 
 
 @pytest.mark.asyncio

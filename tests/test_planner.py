@@ -77,6 +77,22 @@ async def test_planner_rejects_repeated_invalid_plan() -> None:
 
 
 @pytest.mark.asyncio
+async def test_auto_review_drops_redundant_tail_tasks() -> None:
+    llm = ScriptedLLM([
+        '{"tasks":['
+        '{"id":1,"agent":"coder","task":"Fix code and run tests","depends_on":[]},'
+        '{"id":2,"agent":"file_agent","task":"Run function_test",'
+        '"depends_on":[1]},'
+        '{"id":3,"agent":"researcher","task":"Review code changes",'
+        '"depends_on":[2]}]}'
+    ])
+    plan = await Planner(
+        llm, {"coder", "file_agent", "researcher"}, auto_review=True
+    ).plan("Fix code, test, and review")
+    assert [task.agent for task in plan.tasks] == ["coder"]
+
+
+@pytest.mark.asyncio
 async def test_planned_supervisor_passes_first_result_to_second_worker(tmp_path: Path) -> None:
     root = tmp_path / "workspace"
     root.mkdir()

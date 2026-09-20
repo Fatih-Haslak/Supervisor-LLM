@@ -69,7 +69,9 @@ class Router:
                     "planning, review, or uncertainty about the right worker. "
                     "For Python code implementation choose coder; for local document "
                     "search choose researcher; for ordinary files choose file_agent; "
-                    "for arithmetic choose general. Researcher has no internet access.\n"
+                    "for arithmetic choose general; for one CSV analysis choose data_agent; "
+                    "for CSV analysis plus report writing choose supervisor. "
+                    "Researcher has no internet access.\n"
                     "Workers: " + json.dumps(self._descriptions, ensure_ascii=False) + "\n"
                     'Return only JSON: {"agent":"...","confidence":0.0}. '
                     "Confidence is 0 to 1. Do not answer the task."

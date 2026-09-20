@@ -16,6 +16,7 @@ EventName = Literal[
     "agent_error",
     "model_call", "model_error", "model_retry", "tool_call",
     "review_verdict", "route_selected",
+    "approval_requested", "approval_resolved",
 ]
 _active: ContextVar["TraceRecorder | None"] = ContextVar("active_trace", default=None)
 _safe_name = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,39}$")

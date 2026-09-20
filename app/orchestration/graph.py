@@ -29,7 +29,7 @@ class GraphState(TypedDict):
     last_result: WorkerResult | None
     review_attempt: int
     feedback: list[str]
-    review_route: Literal["coder", "supervisor", "end"]
+    review_route: Literal["coder", "writer", "supervisor", "end"]
 
 
 class GraphOrchestrator:
@@ -63,15 +63,17 @@ class GraphOrchestrator:
         builder.add_edge(START, "supervisor")
         for name in self._workers:
             builder.add_node(name, RunnableLambda(self._worker_node(name)))
-            if name == "coder" and reviewer is not None:
+            if name in {"coder", "writer"} and reviewer is not None:
                 builder.add_edge(name, "reviewer")
             else:
                 builder.add_edge(name, "supervisor")
-        if reviewer is not None and "coder" in self._workers:
+        reviewed_roles = {"coder", "writer"} & self._workers.keys()
+        if reviewer is not None and reviewed_roles:
             builder.add_node("reviewer", RunnableLambda(self._reviewer_node))
             builder.add_conditional_edges(
                 "reviewer", self._after_review,
-                {"coder": "coder", "supervisor": "supervisor", "end": END},
+                {**{name: name for name in reviewed_roles},
+                 "supervisor": "supervisor", "end": END},
             )
         builder.add_conditional_edges(
             "supervisor", self._after_supervisor,
@@ -111,7 +113,7 @@ class GraphOrchestrator:
             state = graph_state["agent_state"]
             task = graph_state["task"]
             assignment = task
-            if name == "coder" and graph_state["feedback"]:
+            if name in {"coder", "writer"} and graph_state["feedback"]:
                 assignment += (
                     "\nReviewer feedback to fix: "
                     + json.dumps(graph_state["feedback"], ensure_ascii=False)
@@ -119,7 +121,7 @@ class GraphOrchestrator:
                 )
             result = await self._supervisor._run_worker(
                 state, name, assignment,
-                complete=not (name == "coder" and self._reviewer is not None),
+                complete=not (name in {"coder", "writer"} and self._reviewer is not None),
             )
             updated = graph_state.copy()
             updated["agent_state"] = state
@@ -145,7 +147,7 @@ class GraphOrchestrator:
         state.tool_results.extend(review.tool_calls)
         state.reviews.append(
             ReviewRecord(
-                agent="coder", task=task, attempt=attempt,
+                agent=graph_state["next_agent"], task=task, attempt=attempt,
                 status=review.verdict.status, issues=review.verdict.issues,
             )
         )
@@ -158,9 +160,9 @@ class GraphOrchestrator:
         if review.verdict.status == "pass":
             state.completed_tasks.append(task)
             state.pending_tasks.remove(task)
-            route: Literal["coder", "supervisor", "end"] = "supervisor"
+            route: Literal["coder", "writer", "supervisor", "end"] = "supervisor"
         elif attempt <= self._max_review_retries:
-            route = "coder"
+            route = cast(Literal["coder", "writer"], graph_state["next_agent"])
         else:
             state.fail(
                 "İnceleme geçilemedi; görev tamamlanmadı. Sorunlar: "

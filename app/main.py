@@ -27,7 +27,9 @@ from app.observability.llm import TracedLLM
 from app.orchestration.router import Router
 from app.security.approvals import TerminalApprover, ToolApprovalError
 from app.tools.calculator import CalculatorTool
+from app.tools.csv_analysis import CsvSummaryTool
 from app.tools.filesystem import DirectoryListTool, FileReadTool, FileWriteTool, Workspace
+from app.tools.function_test import FunctionTestTool
 from app.tools.python_exec import PythonExecTool
 from app.tools.registry import ToolRegistry
 from app.tools.search import SearchTool
@@ -84,6 +86,8 @@ async def run_agent(
     workspace = Workspace(Path("workspace"))
     registry = ToolRegistry(approver=TerminalApprover() if sys.stdin.isatty() else None)
     registry.register(CalculatorTool())
+    registry.register(CsvSummaryTool(workspace))
+    registry.register(FunctionTestTool(workspace))
     registry.register(FileReadTool(workspace))
     registry.register(FileWriteTool(workspace))
     registry.register(DirectoryListTool(workspace))

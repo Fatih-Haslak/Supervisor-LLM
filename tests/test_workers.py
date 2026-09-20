@@ -1,3 +1,4 @@
+import json
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -89,9 +90,9 @@ async def test_supervisor_routes_to_file_agent_and_collects_file_result(tmp_path
     assert state.agent_outputs[0].agent == "file_agent"
     assert state.tool_results[0].tool == "file_write"
     assert state.tool_results[0].result.success
-    assert llm.schemas[0]["properties"]["next_agent"]["enum"] == [
-        "coder", "file_agent", "general", "researcher"
-    ]
+    assert llm.schemas[0]["properties"]["next_agent"]["enum"] == sorted(
+        worker_descriptions()
+    )
 
 
 @pytest.mark.asyncio
@@ -127,3 +128,19 @@ async def test_coder_can_write_but_cannot_run_python_by_default(tmp_path: Path) 
     assert result.tool_results[0].result.success
     assert result.tool_results[1].result.error_type == "PermissionDenied"
     assert '"name": "python_exec"' not in llm.requests[0][1].content
+
+
+@pytest.mark.asyncio
+async def test_writer_turns_escaped_markdown_line_breaks_into_lines(tmp_path: Path) -> None:
+    root = tmp_path / "workspace"
+    root.mkdir()
+    llm = ScriptedLLM([
+        json.dumps({"action": "use_tool", "tool": "file_write", "arguments": {
+            "path": "report.md", "content": "# Rapor\\n\\n| Toplam | 500 |"
+        }}),
+        '{"action":"final_answer","answer":"Rapor yazıldı"}',
+    ])
+    worker = build_workers(llm, make_registry(root))["writer"]
+    result = await worker.run("Rapor yaz", AgentState(user_request="Rapor yaz"))
+    assert (root / "report.md").read_text(encoding="utf-8") == "# Rapor\n\n| Toplam | 500 |"
+    assert result.tool_results[0].arguments["content"] == "# Rapor\n\n| Toplam | 500 |"

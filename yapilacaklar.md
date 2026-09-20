@@ -1399,7 +1399,7 @@ Teknik seçenek:
 
 # 35. Faz 25 — Basit UI
 
-İlk backend bittikten sonra küçük bir arayüz ekle.
+İlk backend bittikten sonra küçük bir arayüz ekle. Ama modelimizin sistemimizin neler yaptığına dair detayları gözlemleyelimki sistemi anlayabilelim.
 
 Öneri:
 
