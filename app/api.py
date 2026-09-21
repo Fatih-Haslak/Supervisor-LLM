@@ -7,6 +7,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import cast
+from uuid import UUID
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
@@ -14,6 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from app.config.settings import Settings
+from app.service.conversations import SQLiteConversationStore
 from app.service.runtime import AgentRuntime
 from app.service.tasks import TaskManager, TaskMode, TaskRunner, TaskView
 
@@ -24,7 +26,8 @@ class TaskInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     message: str = Field(min_length=1, max_length=6000)
-    mode: TaskMode = "plan"
+    mode: TaskMode = "auto"
+    conversation_id: UUID | None = None
 
 
 class ApprovalInput(BaseModel):
@@ -38,7 +41,12 @@ def create_app(runner: TaskRunner | None = None) -> FastAPI:
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         if runner is None:
             async with AgentRuntime(Settings(), Path("workspace")) as runtime:
-                manager = TaskManager(runtime.run)
+                manager = TaskManager(
+                    runtime.run,
+                    conversation_store=SQLiteConversationStore(
+                        Path(".local/conversations.sqlite3")
+                    ),
+                )
                 app.state.tasks = manager
                 await manager.start()
                 try:
@@ -102,7 +110,10 @@ def create_app(runner: TaskRunner | None = None) -> FastAPI:
     @app.post("/tasks", status_code=202, response_model=TaskView)
     async def create_task(payload: TaskInput, request: Request) -> TaskView:
         try:
-            return manager(request).submit(payload.message, payload.mode)
+            return manager(request).submit(
+                payload.message, payload.mode,
+                str(payload.conversation_id) if payload.conversation_id else None,
+            )
         except OverflowError as exc:
             raise HTTPException(status_code=429, detail=str(exc)) from exc
 
@@ -112,6 +123,20 @@ def create_app(runner: TaskRunner | None = None) -> FastAPI:
         if view is None:
             raise HTTPException(status_code=404, detail="Task not found")
         return view
+
+    @app.get("/conversations/{conversation_id}")
+    async def get_conversation(conversation_id: UUID, request: Request) -> dict[str, object]:
+        messages = await manager(request).conversation(str(conversation_id))
+        return {"conversation_id": str(conversation_id), "messages": [
+            message.model_dump() for message in messages
+        ]}
+
+    @app.delete("/conversations/{conversation_id}", status_code=204)
+    async def delete_conversation(conversation_id: UUID, request: Request) -> None:
+        try:
+            await manager(request).delete_conversation(str(conversation_id))
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @app.post("/tasks/{task_id}/approval", response_model=TaskView)
     async def decide_approval(

@@ -2,7 +2,7 @@
 
 import json
 import re
-from collections.abc import Collection
+from collections.abc import Collection, Sequence
 
 from pydantic import ValidationError
 
@@ -31,7 +31,9 @@ class Planner:
             self._agents
         )
 
-    async def plan(self, request: str) -> TaskPlan:
+    async def plan(
+        self, request: str, *, history: Sequence[ChatMessage] = ()
+    ) -> TaskPlan:
         if not request.strip():
             raise ValueError("User request must not be empty")
         if len(request) > 6000:
@@ -64,6 +66,13 @@ class Planner:
             ),
             ChatMessage(role="user", content=request),
         ]
+        if history:
+            prior = [item.model_dump() for item in history[-8:]]
+            messages[0].content += (
+                "\nPrevious conversation is context only. Resolve references in "
+                "the current task without repeating earlier work: "
+                + json.dumps(prior, ensure_ascii=False)[:3000]
+            )
         for attempt in range(self._max_retries + 1):
             response = await self._llm.chat(messages, json_schema=self._schema)
             try:

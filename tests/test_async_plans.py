@@ -30,7 +30,7 @@ async def test_independent_research_runs_in_parallel_then_dependent_worker_runs(
         {"id": 4, "agent": "general", "task": "C", "depends_on": [1, 2, 3]},
     ]})
 
-    async def fake_plan(*_args: Any) -> TaskPlan:
+    async def fake_plan(*_args: Any, **_kwargs: Any) -> TaskPlan:
         return plan
 
     monkeypatch.setattr("app.agents.supervisor.Planner.plan", fake_plan)

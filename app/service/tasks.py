@@ -4,10 +4,12 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Literal
+from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.errors import ErrorInfo, describe_error
+from app.llm.schemas import ChatMessage
 from app.observability.events import TraceEvent, TraceRecorder, record, trace_session
 from app.orchestration.state import (
     AgentOutput,
@@ -18,16 +20,18 @@ from app.orchestration.state import (
     ToolCallRecord,
 )
 from app.security.approvals import ApprovalRequest, Approver
+from app.service.conversations import ConversationStore, InMemoryConversationStore
 
-TaskMode = Literal["single", "supervisor", "plan", "router", "graph"]
+TaskMode = Literal["auto", "single", "supervisor", "plan", "router", "graph"]
 TaskStatus = Literal["queued", "running", "waiting_approval", "completed", "failed"]
-TaskRunner = Callable[[str, TaskMode, Approver], Awaitable[AgentState]]
+TaskRunner = Callable[[str, TaskMode, Approver, list[ChatMessage]], Awaitable[AgentState]]
 
 
 class TaskView(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     task_id: str
+    conversation_id: str
     status: TaskStatus
     answer: str | None = None
     error: ErrorInfo | None = None
@@ -44,6 +48,7 @@ class TaskView(BaseModel):
 class TaskRecord:
     message: str
     mode: TaskMode
+    conversation_id: str
     recorder: TraceRecorder = field(default_factory=TraceRecorder)
     status: TaskStatus = "queued"
     state: AgentState | None = None
@@ -54,7 +59,8 @@ class TaskRecord:
     def view(self) -> TaskView:
         state = self.state
         return TaskView(
-            task_id=self.recorder.task_id, status=self.status,
+            task_id=self.recorder.task_id, conversation_id=self.conversation_id,
+            status=self.status,
             answer=state.final_answer if state is not None else None,
             error=self.error, events=list(self.recorder.events),
             tool_calls=list(state.tool_results) if state is not None else [],
@@ -90,12 +96,14 @@ class BrowserApprover:
 
 class TaskManager:
     def __init__(
-        self, runner: TaskRunner, *, max_queue_size: int = 8, max_history: int = 100
+        self, runner: TaskRunner, *, max_queue_size: int = 8, max_history: int = 100,
+        conversation_store: ConversationStore | None = None,
     ) -> None:
         self._runner = runner
         self._queue: asyncio.Queue[TaskRecord] = asyncio.Queue(maxsize=max_queue_size)
         self._records: dict[str, TaskRecord] = {}
         self._max_history = max_history
+        self._conversations = conversation_store or InMemoryConversationStore()
         self._worker: asyncio.Task[None] | None = None
 
     async def start(self) -> None:
@@ -115,7 +123,9 @@ class TaskManager:
             if task.approval_future is not None and not task.approval_future.done():
                 task.approval_future.cancel()
 
-    def submit(self, message: str, mode: TaskMode) -> TaskView:
+    def submit(
+        self, message: str, mode: TaskMode, conversation_id: str | None = None
+    ) -> TaskView:
         if self._worker is None:
             raise RuntimeError("Task manager is not running")
         if self._queue.full():
@@ -127,7 +137,8 @@ class TaskManager:
                 del self._records[task_id]
         if len(self._records) >= self._max_history:
             raise OverflowError("Task history is full")
-        task = TaskRecord(message=message, mode=mode)
+        session = str(UUID(conversation_id)) if conversation_id else str(uuid4())
+        task = TaskRecord(message=message, mode=mode, conversation_id=session)
         self._records[task.recorder.task_id] = task
         self._queue.put_nowait(task)
         return task.view()
@@ -135,6 +146,17 @@ class TaskManager:
     def get(self, task_id: str) -> TaskView | None:
         task = self._records.get(task_id)
         return task.view() if task is not None else None
+
+    async def conversation(self, conversation_id: str) -> list[ChatMessage]:
+        return await self._conversations.list(str(UUID(conversation_id)))
+
+    async def delete_conversation(self, conversation_id: str) -> None:
+        session = str(UUID(conversation_id))
+        if any(task.conversation_id == session and task.status in {
+            "queued", "running", "waiting_approval"
+        } for task in self._records.values()):
+            raise RuntimeError("Conversation has an active task")
+        await self._conversations.delete(session)
 
     def decide(self, task_id: str, approved: bool) -> bool:
         task = self._records.get(task_id)
@@ -154,14 +176,20 @@ class TaskManager:
                 with trace_session(task.recorder):
                     record("task_started")
                     try:
+                        history = await self._conversations.list(task.conversation_id)
                         task.state = await self._runner(
-                            task.message, task.mode, BrowserApprover(task)
+                            task.message, task.mode, BrowserApprover(task), history
                         )
                         if task.state.pending_tasks:
                             task.status = "failed"
                             record("task_failed", error_type="IncompleteTask")
                         else:
                             task.status = "completed"
+                            if task.state.final_answer:
+                                await self._conversations.append(
+                                    task.conversation_id, task.message,
+                                    task.state.final_answer,
+                                )
                             record("task_completed", success=True)
                     except Exception as exc:
                         partial = getattr(exc, "state", None)

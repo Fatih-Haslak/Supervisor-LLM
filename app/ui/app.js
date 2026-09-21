@@ -13,13 +13,56 @@ const errorEl = document.getElementById("ui-error");
 const answerEl = document.getElementById("answer-text");
 let stream = null;
 let activeTask = null;
+let conversationId = localStorage.getItem("agent-conversation-id") || crypto.randomUUID();
+let loadedTask = null;
+localStorage.setItem("agent-conversation-id", conversationId);
 const modeDescriptions = {
+  auto: "Sohbette geçmişi kullanır; hesaplarda araç, dosya ve çok adımlı işlerde supervisor seçer.",
   plan: "Görevi adımlara ayırır, uzman agent'lara verir ve yazılan dosyaları reviewer ile kontrol eder.",
   supervisor: "Supervisor her turda sıradaki agent'ı seçer. Çok adımlı görevler için deneysel alternatiftir.",
   router: "Önce basit görevleri tek uzmana yönlendirir; karmaşık işlerde supervisor'a geçer.",
   single: "Tek agent kendi araçlarını kullanır; uzmanlar arasında görev dağıtmaz.",
   graph: "Aynı yerel model ve uzmanları LangGraph akış motoruyla çalıştırır."
 };
+const chatHistory = document.getElementById("chat-history");
+
+function showMessages(messages) {
+  if (!messages.length) return empty(chatHistory, "İlk mesajını yaz.");
+  chatHistory.replaceChildren(...messages.map((message) => {
+    const bubble = document.createElement("div");
+    bubble.className = `chat-message ${message.role}`;
+    const label = document.createElement("strong");
+    label.textContent = message.role === "user" ? "Sen" : "Asistan";
+    const body = document.createElement("p");
+    body.textContent = message.content;
+    bubble.append(label, body);
+    return bubble;
+  }));
+  chatHistory.lastElementChild?.scrollIntoView({ block: "nearest" });
+}
+
+async function loadConversation() {
+  const response = await fetch(`/conversations/${conversationId}`);
+  if (!response.ok) throw new Error("Sohbet geçmişi yüklenemedi.");
+  const data = await response.json();
+  showMessages(data.messages);
+}
+
+loadConversation().catch((error) => showError(error.message));
+
+document.getElementById("new-chat-button").addEventListener("click", async () => {
+  if (activeTask && runButton.disabled) return;
+  try {
+    const response = await fetch(`/conversations/${conversationId}`, { method: "DELETE" });
+    if (!response.ok) throw new Error("Sohbet silinemedi.");
+    conversationId = crypto.randomUUID();
+    localStorage.setItem("agent-conversation-id", conversationId);
+    loadedTask = null;
+    activeTask = null;
+    showMessages([]);
+    showError("");
+  } catch (error) { showError(error.message); }
+});
 const modeSelect = document.getElementById("task-mode");
 modeSelect.addEventListener("change", () => {
   document.getElementById("mode-description").textContent = modeDescriptions[modeSelect.value];
@@ -74,6 +117,8 @@ function detailItem(title, subtitle, detail) {
 
 function render(view) {
   activeTask = view.task_id;
+  conversationId = view.conversation_id;
+  localStorage.setItem("agent-conversation-id", conversationId);
   document.getElementById("task-id").textContent = `Görev: ${view.task_id}`;
   statusEl.textContent = labels[view.status] || view.status;
   statusEl.dataset.state = view.status;
@@ -137,6 +182,10 @@ function render(view) {
   }
   answerEl.textContent = view.answer || "Görev tamamlandığında burada görünecek.";
   answerEl.className = view.answer ? "" : "empty";
+  if (view.status === "completed" && loadedTask !== view.task_id) {
+    loadedTask = view.task_id;
+    loadConversation().catch((error) => showError(error.message));
+  }
   if (["completed", "failed"].includes(view.status) && stream) {
     stream.close();
     stream = null;
@@ -169,16 +218,25 @@ form.addEventListener("submit", async (event) => {
   if (stream) stream.close();
   runButton.disabled = true;
   showError("");
+  const message = document.getElementById("task-message").value.trim();
+  if (!message) { runButton.disabled = false; return; }
+  const pending = [...chatHistory.querySelectorAll(".chat-message")].map((item) => ({
+    role: item.classList.contains("user") ? "user" : "assistant",
+    content: item.querySelector("p").textContent
+  }));
+  showMessages([...pending, { role: "user", content: message }]);
   try {
     const response = await fetch("/tasks", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        message: document.getElementById("task-message").value.trim(),
-        mode: modeSelect.value
+        message,
+        mode: modeSelect.value,
+        conversation_id: conversationId
       })
     });
     if (!response.ok) throw new Error(`Görev başlatılamadı (${response.status}).`);
     const view = await response.json();
+    document.getElementById("task-message").value = "";
     render(view);
     stream = new EventSource(`/tasks/${view.task_id}/events`);
     stream.addEventListener("update", (update) => render(JSON.parse(update.data)));
@@ -186,5 +244,6 @@ form.addEventListener("submit", async (event) => {
   } catch (error) {
     runButton.disabled = false;
     showError(error.message);
+    loadConversation().catch(() => {});
   }
 });

@@ -7,7 +7,9 @@ yönlendirmesi ve uzman worker'lar vardır.
 
 ## Hangi çalışma biçimini kullanmalıyım?
 
-Arayüzün varsayılanı **Genel (planlı supervisor)**. Hedef mimarinin ana yoludur:
+Arayüzün varsayılanı **Otomatik**. Sıradan mesajlar doğrudan sohbete gider;
+hesaplama ve dosya görevlerinde araç kullanan agent'lar devreye girer. Dosya ve
+çok adımlı isteklerde supervisor uzman worker'lara görev dağıtır:
 
 ```text
 Kullanıcı → Supervisor/Planner → uzman agent → araçlar → Reviewer → tek yanıt
@@ -295,7 +297,15 @@ kalıcı dağıtık kuyruk bu yerel sürümde kullanılmaz.
 .venv\Scripts\python.exe -m app.api --port 8000
 ```
 
-Tarayıcıda `http://127.0.0.1:8000/` adresini açın. Arayüz kullanıcı görevini,
+Tarayıcıda `http://127.0.0.1:8000/` adresini açın. Varsayılan Otomatik mod
+sohbet geçmişini aynı konuşmanın sonraki mesajlarına aktarır. Geçmiş
+`.local/conversations.sqlite3` içinde kalır; sayfa yenilenince ve sunucu
+yeniden başlayınca aynı sohbet geri yüklenir. “Sohbeti sil ve yeni başlat”
+bu konuşmanın geçmişini siler. Ayrı bir yeni sohbette önceki sohbette söylenen
+adı hatırlaması beklenmez; kalıcı kullanıcı tercihleri için aşağıdaki açık
+`--memory-add` komutları kullanılır.
+
+Arayüz kullanıcı görevini,
 agent olaylarını, model süresini/token sayılarını, araç çağrılarını ve
 sonuçlarını, inceleme kararlarını ve son yanıtı gösterir. Dosya yazma işlemi
 olursa doğrulanmış araç argümanları gösterilir; açık onay veya ret beklenir.
@@ -316,14 +326,16 @@ workspace/buggy_math_tests.json vakalarını function_test ile çalıştır ve d
 
 API uç noktaları: `POST /tasks`, `GET /tasks/{task_id}`,
 `GET /tasks/{task_id}/events` (SSE) ve
-`POST /tasks/{task_id}/approval`. İstek örneği:
+`POST /tasks/{task_id}/approval`; ayrıca `GET` ve `DELETE`
+`/conversations/{conversation_id}`. İstek örneği:
 
 ```json
-{"message":"3+44 işlemini hesapla","mode":"single"}
+{"message":"3+44 işlemini hesapla","mode":"auto"}
 ```
 
-`mode` için `single`, `supervisor`, `plan`, `router` veya `graph` seçilebilir;
-varsayılan `plan`dır. API ve UI yalnızca loopback bağlantılarına açıktır;
+`mode` için `auto`, `single`, `supervisor`, `plan`, `router` veya `graph`
+seçilebilir; varsayılan `auto`dur. İlk istekte `conversation_id` verilmez;
+yanıttan gelen UUID sonraki isteklerde kullanılır. API ve UI yalnızca loopback bağlantılarına açıktır;
 sunucu `127.0.0.1` adresine bağlanır. Bu sürümde çok kullanıcılı yetkilendirme
 yoktur; internete açmayın. SSE, olay meta verilerinin yanında yerel görev
 anlık görüntüsünü de gönderir; bu görüntü araç argümanlarını ve sonuçlarını

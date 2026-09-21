@@ -24,7 +24,10 @@ async def test_queue_runs_one_task_at_a_time() -> None:
     active = 0
     peak = 0
 
-    async def run(message: str, _mode: TaskMode, _approver: Approver) -> AgentState:
+    async def run(
+        message: str, _mode: TaskMode, _approver: Approver,
+        _history: list[ChatMessage],
+    ) -> AgentState:
         nonlocal active, peak
         active += 1
         peak = max(peak, active)
@@ -54,7 +57,10 @@ async def test_queue_runs_one_task_at_a_time() -> None:
 
 @pytest.mark.asyncio
 async def test_approval_requires_explicit_decision() -> None:
-    async def run(_message: str, _mode: TaskMode, approver: Approver) -> AgentState:
+    async def run(
+        _message: str, _mode: TaskMode, approver: Approver,
+        _history: list[ChatMessage],
+    ) -> AgentState:
         granted = await approver.request_approval(ApprovalRequest(
             tool="file_write", arguments={"path": "note.txt", "content": "Merhaba"}
         ))

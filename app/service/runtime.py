@@ -2,12 +2,14 @@
 
 from pathlib import Path
 
+from app.agents.chat import automatic_mode, run_chat
 from app.agents.reviewer import ReviewerAgent
 from app.agents.single import SingleAgent
 from app.agents.supervisor import Supervisor
 from app.agents.workers import build_workers, worker_descriptions
 from app.config.settings import Settings
 from app.llm.client import LlamaCppClient
+from app.llm.schemas import ChatMessage
 from app.llm.strategy import SharedModelStrategy
 from app.memory.context import MemoryAwareLLM
 from app.memory.store import MemoryEntry, SQLiteMemoryStore
@@ -40,7 +42,10 @@ class AgentRuntime:
     async def __aexit__(self, *_exc: object) -> None:
         await self._client.__aexit__(*_exc)
 
-    async def run(self, message: str, mode: TaskMode, approver: Approver) -> AgentState:
+    async def run(
+        self, message: str, mode: TaskMode, approver: Approver,
+        history: list[ChatMessage],
+    ) -> AgentState:
         registry = ToolRegistry(approver=approver)
         for tool in (
             CalculatorTool(), CsvSummaryTool(self._workspace),
@@ -49,15 +54,26 @@ class AgentRuntime:
             DirectoryListTool(self._workspace), SearchTool(self._workspace),
         ):
             registry.register(tool)
-        strategy = SharedModelStrategy(
-            MemoryAwareLLM(TracedLLM(self._client), self._memories)
-        )
+        self._memories = await SQLiteMemoryStore(self._settings.memory_db_path).list()
+        strategy = SharedModelStrategy(MemoryAwareLLM(
+            TracedLLM(self._client), self._memories
+        ))
+        if mode == "auto":
+            chosen = automatic_mode(message)
+            if chosen == "chat":
+                with agent_span("chat"):
+                    return await run_chat(strategy.for_role("chat"), message, history)
+            mode = "single" if chosen == "single" else "supervisor"
         if mode == "single":
             with agent_span("single"):
                 return (await SingleAgent(
                     strategy.for_role("single"), registry,
                     {"calculator", "file_read", "file_write", "directory_list"},
-                ).run(message)).state
+                    role_instructions=(
+                        "For every arithmetic expression, call calculator first. "
+                        "Use its result in the final answer; do not calculate mentally."
+                    ),
+                ).run(message, history=history)).state
         workers = build_workers(
             strategy.for_role("general"), registry, model_for_role=strategy.for_role
         )
@@ -68,9 +84,9 @@ class AgentRuntime:
             planner_llm=strategy.for_role("planner"),
         )
         if mode == "supervisor":
-            return await supervisor.run(message)
+            return await supervisor.run(message, history=history)
         if mode == "plan":
-            return await supervisor.run_planned(message)
+            return await supervisor.run_planned(message, history=history)
         if mode == "router":
             return await Router(
                 strategy.for_role("router"), workers, supervisor,

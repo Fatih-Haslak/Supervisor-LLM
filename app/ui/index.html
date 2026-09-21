@@ -16,36 +16,44 @@
 
     <main>
       <section class="intro" aria-labelledby="page-title">
-        <h1 id="page-title">Görevi ver. Akışı izle.</h1>
-        <p>Tek yerel model, göreve göre farklı roller üstlenir. Ana çalışma biçimi planlı supervisor'dır.</p>
+        <h1 id="page-title">Sohbet et. Gerektiğinde agent'lar çalışsın.</h1>
+        <p>Bu sohbetin geçmişi yerel olarak saklanır. Dosya ve çok adımlı görevlerde supervisor uzman agent'lara geçer.</p>
         <p class="architecture">Sen → Supervisor → Uzman agent + araçlar → Reviewer → Tek yanıt</p>
       </section>
 
       <div class="layout">
         <section class="composer" aria-labelledby="task-heading">
-          <h2 id="task-heading">Yeni görev</h2>
+          <h2 id="task-heading">Mesaj gönder</h2>
           <form id="task-form">
-            <label for="task-message">Ne yapılmasını istiyorsun?</label>
-            <textarea id="task-message" name="message" maxlength="6000" rows="7" required placeholder="workspace içindeki bir belgeyi incele ve bulguları özetle"></textarea>
-            <p class="default-mode">Önerilen varsayılan: <strong>Genel (planlı supervisor)</strong></p>
+            <label for="task-message">Mesajın</label>
+            <textarea id="task-message" name="message" maxlength="6000" rows="7" required placeholder="Merhaba, benim adım Fatih. veya workspace içindeki belgeyi özetle"></textarea>
+            <p class="default-mode">Önerilen varsayılan: <strong>Otomatik sohbet + araçlar + supervisor</strong></p>
             <details class="advanced-mode">
               <summary>Gelişmiş çalışma biçimleri</summary>
               <label for="task-mode">Yürütme biçimi</label>
               <select id="task-mode" name="mode" aria-describedby="mode-description">
+                <option value="auto">Otomatik · Sohbet ve görev</option>
                 <option value="plan">Genel · Planlı supervisor</option>
                 <option value="supervisor">Supervisor · Anlık delege etme</option>
                 <option value="router">Router · Basit işlerde hızlı yönlendirme</option>
                 <option value="single">Tek agent · Tek döngü</option>
                 <option value="graph">LangGraph · Alternatif akış motoru</option>
               </select>
-              <p id="mode-description">Görevi adımlara ayırır, uzman agent'lara verir ve yazılan dosyaları reviewer ile kontrol eder.</p>
+              <p id="mode-description">Sohbette geçmişi kullanır; hesaplarda araç, dosya ve çok adımlı işlerde supervisor seçer.</p>
             </details>
-            <button id="run-button" type="submit">Görevi başlat</button>
+            <button id="run-button" type="submit">Gönder</button>
           </form>
           <p class="note">Dosya yazma isteği çıkarsa işlem durur ve onayınızı bekler.</p>
         </section>
 
         <section class="monitor" aria-labelledby="monitor-heading">
+          <section class="conversation" aria-labelledby="conversation-heading">
+            <div class="conversation-heading">
+              <h2 id="conversation-heading">Sohbet</h2>
+              <button id="new-chat-button" type="button">Sohbeti sil ve yeni başlat</button>
+            </div>
+            <div id="chat-history" class="chat-history" aria-live="polite"><p class="empty">İlk mesajını yaz.</p></div>
+          </section>
           <div class="monitor-heading">
             <div><h2 id="monitor-heading">Çalışma akışı</h2><p id="task-id">Henüz görev yok</p></div>
             <span id="status" class="status" aria-live="polite">Hazır</span>

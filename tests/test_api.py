@@ -9,7 +9,10 @@ from app.security.approvals import ApprovalRequest, Approver
 from app.service.tasks import TaskMode
 
 
-async def fake_runner(message: str, _mode: TaskMode, _approver: Approver) -> AgentState:
+async def fake_runner(
+    message: str, _mode: TaskMode, _approver: Approver,
+    _history: list[ChatMessage],
+) -> AgentState:
     state = AgentState.for_request(message, ChatMessage(role="system", content="test"))
     state.finish("Yanıt: " + message)
     return state
@@ -32,6 +35,14 @@ def test_api_task_lifecycle_stream_and_ui() -> None:
                 break
             time.sleep(0.01)
         assert status["answer"] == "Yanıt: Merhaba"
+        conversation_id = status["conversation_id"]
+        transcript = client.get(f"/conversations/{conversation_id}")
+        assert transcript.status_code == 200
+        assert [item["content"] for item in transcript.json()["messages"]] == [
+            "Merhaba", "Yanıt: Merhaba"
+        ]
+        assert client.delete(f"/conversations/{conversation_id}").status_code == 204
+        assert client.get(f"/conversations/{conversation_id}").json()["messages"] == []
         events = client.get(f"/tasks/{task_id}/events")
         assert events.status_code == 200
         assert "event: update" in events.text
@@ -56,7 +67,8 @@ def test_api_rejects_invalid_input_and_cross_origin_post() -> None:
 
 def test_api_exposes_exact_approval_and_accepts_one_decision() -> None:
     async def approval_runner(
-        _message: str, _mode: TaskMode, approver: Approver
+        _message: str, _mode: TaskMode, approver: Approver,
+        _history: list[ChatMessage],
     ) -> AgentState:
         granted = await approver.request_approval(ApprovalRequest(
             tool="file_write", arguments={"path": "note.txt", "content": "deneme"}

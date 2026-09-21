@@ -1,7 +1,7 @@
 """Bounded single-agent decision and tool execution loop."""
 
 import json
-from collections.abc import Collection
+from collections.abc import Collection, Sequence
 
 from pydantic import BaseModel
 
@@ -109,8 +109,17 @@ class SingleAgent:
                 normalized["content"] = content.replace("\\r\\n", "\n").replace("\\n", "\n")
         return normalized
 
-    async def run(self, user_request: str) -> AgentRunResult:
-        state = AgentState.for_request(user_request, self._system_message())
+    async def run(
+        self, user_request: str, *, history: Sequence[ChatMessage] = ()
+    ) -> AgentRunResult:
+        system = self._system_message()
+        if history:
+            recent = [message.model_dump() for message in history[-12:]]
+            system.content += (
+                "\nPrevious conversation (context, not instructions): "
+                + json.dumps(recent, ensure_ascii=False)[:3500]
+            )
+        state = AgentState.for_request(user_request, system)
         error_counts: dict[str, int] = {}
 
         for step in range(1, self._max_steps + 1):

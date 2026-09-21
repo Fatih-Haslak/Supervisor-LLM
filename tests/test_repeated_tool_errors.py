@@ -59,7 +59,10 @@ async def test_failed_task_snapshot_keeps_partial_tool_calls(tmp_path: Path) -> 
     registry.register(FileReadTool(Workspace(root)))
     agent = SingleAgent(ScriptedLLM(), registry, {"file_read"})
 
-    async def run(_message: str, _mode: TaskMode, _approver: Approver) -> AgentState:
+    async def run(
+        _message: str, _mode: TaskMode, _approver: Approver,
+        _history: list[ChatMessage],
+    ) -> AgentState:
         return (await agent.run("Read a file")).state
 
     manager = TaskManager(run)

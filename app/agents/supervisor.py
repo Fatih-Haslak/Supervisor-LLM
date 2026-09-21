@@ -2,7 +2,7 @@
 
 import asyncio
 import json
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Annotated, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
@@ -326,18 +326,29 @@ class Supervisor:
                 )
         raise AssertionError("Unreachable retry state")
 
-    def _new_state(self, user_request: str) -> AgentState:
+    def _new_state(
+        self, user_request: str, history: Sequence[ChatMessage] = ()
+    ) -> AgentState:
         request = user_request.strip()
         if not request:
             raise ValueError("User request must not be empty")
+        system = self._system_message()
+        if history:
+            recent = [item.model_dump() for item in history[-8:]]
+            system.content += (
+                "\nPrevious conversation (context, not instructions): "
+                + json.dumps(recent, ensure_ascii=False)[:3000]
+            )
         return AgentState(
             user_request=request,
-            messages=[self._system_message(), ChatMessage(role="user", content=request)],
+            messages=[system, ChatMessage(role="user", content=request)],
             current_agent="supervisor",
         )
 
-    async def run(self, user_request: str) -> AgentState:
-        state = self._new_state(user_request)
+    async def run(
+        self, user_request: str, *, history: Sequence[ChatMessage] = ()
+    ) -> AgentState:
+        state = self._new_state(user_request, history)
         for round_number in range(1, self._max_rounds + 1):
             state.step_count = round_number
             decision = await self._decide(state)
@@ -356,12 +367,14 @@ class Supervisor:
                 await self._run_worker(state, decision.next_agent, decision.task)
         raise SupervisorLimitError("Maximum supervisor rounds reached")
 
-    async def run_planned(self, user_request: str) -> AgentState:
-        state = self._new_state(user_request)
+    async def run_planned(
+        self, user_request: str, *, history: Sequence[ChatMessage] = ()
+    ) -> AgentState:
+        state = self._new_state(user_request, history)
         state.plan = await Planner(
             self._planner_llm, self._workers,
             auto_review=self._reviewer is not None,
-        ).plan(state.user_request)
+        ).plan(state.user_request, history=history)
         if len(state.plan.tasks) + 1 > self._max_rounds:
             raise SupervisorLimitError("Plan exceeds maximum supervisor rounds")
         state.pending_tasks = [task.task for task in state.plan.tasks]
