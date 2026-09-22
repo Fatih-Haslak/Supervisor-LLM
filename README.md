@@ -7,9 +7,12 @@ yönlendirmesi ve uzman worker'lar vardır.
 
 ## Hangi çalışma biçimini kullanmalıyım?
 
-Arayüzün varsayılanı **Otomatik**. Sıradan mesajlar doğrudan sohbete gider;
-hesaplama ve dosya görevlerinde araç kullanan agent'lar devreye girer. Dosya ve
-çok adımlı isteklerde supervisor uzman worker'lara görev dağıtır:
+Arayüzün varsayılanı **Otomatik**. Kısa sohbet ve açık aritmetik hızlıca
+yönlendirilir. Diğer isteklerde aynı yerel model kısa bir yapılandırılmış karar
+vererek sohbet, tek agent, supervisor veya planlı supervisor yolunu seçer.
+Yönlendirici yakın konuşma geçmişini kullanır; dosya, kod ve kamuya açık bilgi
+istekleri için güvenli yönlendirme kuralları uygulanır. Çok adımlı isteklerde
+planlayıcı işi uzman worker'lara dağıtır:
 
 ```text
 Kullanıcı → Supervisor/Planner → uzman agent → araçlar → Reviewer → tek yanıt
@@ -119,8 +122,8 @@ böylece yerel model serbest JSON alanlarını sonsuza dek üretmez. Pydantic
 geçersiz yanıtı reddeder; en fazla iki kez
 yeniden deneme yapılır. `ToolRegistry`, aracı yalnızca çağıranın açık izin
 listesindeyse gösterir ve çalıştırır. Mevcut araçlar: `calculator`, `file_read`,
-`file_write`, `directory_list`, `csv_summary`, `function_test`, isteğe bağlı
-`python_exec`.
+`file_write`, `directory_list`, `csv_summary`, `function_test`, `search`, API
+çalışmasında `wikipedia_lookup` ve isteğe bağlı `python_exec`.
 
 Dosya araçları sadece `workspace/` altında çalışır. `file_write` mevcut dosyayı
 ancak `overwrite=true` verilirse değiştirir. Araç yolları `note.txt` veya
@@ -136,16 +139,22 @@ Her görev `AgentState` içinde benzersiz görev kimliği, mesajlar, mevcut agen
 bekleyen/tamamlanan görevler, worker çıktıları, araç sonuçları, adım sayısı ve
 son cevabı tutar. Supervisor yapılandırılmış JSON kararıyla görevi izinli
 worker'a verir, çıktısını state'e işler ve son cevabı üretir. En fazla altı tur
-çalışır. `general` basit ve karma görevleri; `researcher` yerel belge aramasını;
+çalışır. `general` basit ve karma görevleri; `researcher` yerel belge aramasını
+ve API'de kamuya açık Wikipedia sorgularını;
 `coder` workspace içi Python kodunu ve sınırlı fonksiyon testlerini; `file_agent`
 dosya yönetimini; `data_agent` CSV analizini; `writer` Markdown raporunu üstlenir.
 Hepsi aynı GGUF model örneğini kullanır, fakat prompt ve araç izinleri ayrıdır.
 `researcher` yazamaz; `file_agent` kod çalıştıramaz. `python_exec` sadece
 `--allow-python` ile `general` ve `coder` rollerine açılır.
 
-`search` aracı yalnızca `workspace/` altındaki UTF-8 metinlerde arama yapar;
-internete bağlanmaz. Güncel veya doğrulanamayan bilgi sorularında yerel modelin
-yanıtı kaynak doğrulaması sayılmaz.
+`search` aracı yalnızca `workspace/` altındaki UTF-8 metinlerde arama yapar.
+API'nin Otomatik modunda kamuya açık konu ve kişi soruları için
+`wikipedia_lookup`, yalnızca başlığı `tr.wikipedia.org` adresine gönderir ve
+kaynak bağlantısını yanıta ekler. Bu ağ aracı varsayılan olarak açıktır;
+`.env` içinde `AGENT_WEB_LOOKUP_ENABLED=false` ile kapatılabilir. CLI agent
+modu yerel kalır. Wikipedia bulunamaz veya ağ erişimi başarısız olursa sistem
+bilgiyi doğrulayamadığını söylemelidir; güncel veya yüksek önem taşıyan bilgi
+için tek kaynak yeterli olmayabilir.
 
 `--plan` seçeneği supervisor'dan önce 1–4 alt görevli yapılandırılmış bir plan
 ister. Plan görevlerinin agent adları, benzersiz kimlikleri ve bağımlılıkları
@@ -249,15 +258,23 @@ Yerel modelin örnek görevlerdeki performansını ölçmek için:
 
 ```powershell
 .venv\Scripts\python.exe -m app.evaluation.runner
+.venv\Scripts\python.exe -m app.evaluation.runner --case auto-code-fix
+.venv\Scripts\python.exe -m app.evaluation.runner --case auto-csv-analysis --repeat 3
 ```
 
-Görevler `eval/cases.json` içindedir. Dosya örnekleri her vaka için geçici bir
-çalışma alanına yazılır; kayıtlı kişisel bellek değerlendirmeye katılmaz.
+Senaryolar `eval/cases.json` içindedir. Değerlendirici arayüzle aynı
+`AgentRuntime` ve Otomatik yönlendirme yolunu kullanır; sohbet geçmişi,
+araç çağrıları, uzman seçimi, dosya sonuçları ve gelişmiş modları sınar.
+Her vaka ayrı geçici çalışma alanında yürür; kişisel bellek katılmaz.
+Dosya yazma onayı yalnızca bu geçici test alanında otomatik verilir.
+Başarısız vaka varsa komut çıkış kodu 1 olur. `--case` tek bir vakayı yeniden
+çalıştırır. `--repeat` aynı vakayı ayrı geçici alanlarda birden fazla kez çalıştırarak
+kararsız sonuçları görünür kılar.
+
 Rapor görev başarısı, araç/agent seçimi,
 ortalama adım ve süre, araç hata oranı, token sayıları, reviewer geçiş oranı ve
-retry oranını verir. Örnek set salt okunur işlemlerden oluşur; değerlendirme
-çalıştırıcısı yazma onayı vermez. `reviewer_pass_rate`, hiç inceleme olmayan
-sette `null` döner.
+retry oranı ile her vakanın gerçek yanıtını verir. `reviewer_pass_rate`, hiç
+inceleme olmayan sette `null` döner.
 
 ## Bağlam yönetimi (Faz 19)
 

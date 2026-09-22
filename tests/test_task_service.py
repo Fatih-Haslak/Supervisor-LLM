@@ -86,3 +86,35 @@ async def test_approval_requires_explicit_decision() -> None:
         assert final.error.code == "APPROVAL_DENIED"
     finally:
         await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_failed_turn_is_visible_to_followup_without_stopping_queue() -> None:
+    histories: list[list[str]] = []
+
+    async def run(
+        message: str, _mode: TaskMode, _approver: Approver,
+        history: list[ChatMessage],
+    ) -> AgentState:
+        histories.append([item.content for item in history])
+        if message == "ilk görev":
+            raise ValueError("Bad model result")
+        state = AgentState.for_request(message, ChatMessage(role="system", content="test"))
+        state.finish("İkinci yanıt")
+        return state
+
+    manager = TaskManager(run)
+    await manager.start()
+    try:
+        first = manager.submit("ilk görev", "auto")
+        await manager._queue.join()
+        failed = manager.get(first.task_id)
+        assert failed is not None and failed.status == "failed"
+        assert failed.error is not None and failed.error.code == "INVALID_INPUT"
+        second = manager.submit("tekrar dene", "auto", first.conversation_id)
+        await manager._queue.join()
+        assert manager.get(second.task_id).status == "completed"  # type: ignore[union-attr]
+        assert histories[1][0] == "ilk görev"
+        assert "Hata [INVALID_INPUT]" in histories[1][1]
+    finally:
+        await manager.close()

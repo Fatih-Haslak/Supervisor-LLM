@@ -30,6 +30,12 @@ class ErrorInfo(BaseModel):
 
 def describe_error(exc: Exception) -> ErrorInfo:
     if isinstance(exc, RepeatedToolError):
+        if exc.error_type == "InvalidArguments":
+            return ErrorInfo(
+                code="TOOL_FAILURE",
+                message="Model araç için geçerli girdi oluşturamadı. İsteği daha açık yazın.",
+                retryable=False,
+            )
         return ErrorInfo(
             code="TOOL_FAILURE",
             message="Araç aynı hatayı tekrarladı; dosya yolunu ve araç izinlerini kontrol edin.",

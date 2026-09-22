@@ -3,6 +3,7 @@
 import asyncio
 import sqlite3
 from collections import defaultdict
+from contextlib import closing
 from pathlib import Path
 from typing import Protocol
 
@@ -37,7 +38,7 @@ class SQLiteConversationStore:
     def __init__(self, path: Path) -> None:
         self.path = path.expanduser().resolve()
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        with self._connect() as connection:
+        with closing(self._connect()) as connection, connection:
             connection.execute(
                 "CREATE TABLE IF NOT EXISTS conversation_messages ("
                 "id INTEGER PRIMARY KEY AUTOINCREMENT, "
@@ -53,7 +54,7 @@ class SQLiteConversationStore:
         return sqlite3.connect(self.path, timeout=5)
 
     def _list(self, conversation_id: str) -> list[ChatMessage]:
-        with self._connect() as connection:
+        with closing(self._connect()) as connection, connection:
             rows = connection.execute(
                 "SELECT role, content FROM ("
                 "SELECT id, role, content FROM conversation_messages "
@@ -66,7 +67,7 @@ class SQLiteConversationStore:
         return await asyncio.to_thread(self._list, conversation_id)
 
     def _append(self, conversation_id: str, user: str, assistant: str) -> None:
-        with self._connect() as connection:
+        with closing(self._connect()) as connection, connection:
             connection.executemany(
                 "INSERT INTO conversation_messages(conversation_id, role, content) "
                 "VALUES (?, ?, ?)",
@@ -84,7 +85,7 @@ class SQLiteConversationStore:
         await asyncio.to_thread(self._append, conversation_id, user, assistant)
 
     def _delete(self, conversation_id: str) -> None:
-        with self._connect() as connection:
+        with closing(self._connect()) as connection, connection:
             connection.execute(
                 "DELETE FROM conversation_messages WHERE conversation_id = ?",
                 (conversation_id,),

@@ -21,3 +21,9 @@ def test_llm_timeout_setting_is_bounded() -> None:
         Settings(_env_file=None, llm_timeout_seconds=0)
     with pytest.raises(ValidationError):
         Settings(_env_file=None, llm_timeout_seconds=601)
+
+
+def test_public_web_lookup_can_be_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("AGENT_WEB_LOOKUP_ENABLED", "false")
+    settings = Settings(_env_file=None)
+    assert settings.web_lookup_enabled is False

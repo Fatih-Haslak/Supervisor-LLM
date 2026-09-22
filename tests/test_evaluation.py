@@ -64,8 +64,42 @@ def test_evaluation_report_computes_success_and_cost() -> None:
 
 def test_evaluation_case_set_is_valid() -> None:
     cases = load_cases(Path("eval/cases.json"))
-    assert len(cases) >= 2
+    assert len(cases) >= 18
     assert all(case.expected_answer_contains for case in cases)
+    assert sum(case.mode == "auto" for case in cases) >= 12
+    assert {"single", "plan", "router", "graph"}.issubset({case.mode for case in cases})
+    assert any(case.prior_turns for case in cases)
+    assert any(case.expected_file_contains for case in cases)
+
+
+def test_evaluation_allows_review_reads_but_requires_written_artifact() -> None:
+    case = EvaluationCase(
+        id="write-report", task="Rapor yaz", expected_tools=["file_write"],
+        expected_answer_contains="rapor", expected_file_contains={"report.md": "500"},
+    )
+    state = AgentState(user_request=case.task)
+    state.tool_results.extend([
+        ToolCallRecord(tool="file_write", arguments={}, result=ToolResult.ok("ok")),
+        ToolCallRecord(tool="file_read", arguments={}, result=ToolResult.ok("500")),
+    ])
+    state.finish("rapor yazıldı")
+    good = evaluate([EvaluationObservation(case=case, state=state, latency_ms=1)])
+    missing = evaluate([
+        EvaluationObservation(case=case, state=state, latency_ms=1, files_match=False)
+    ])
+    assert good.cases[0].success
+    assert not missing.cases[0].success
+
+
+def test_evaluation_rejects_english_answer_to_turkish_case() -> None:
+    case = EvaluationCase(
+        id="language-check", task="Hatayı düzelt", expected_answer_contains="47"
+    )
+    state = AgentState(user_request=case.task)
+    state.finish("The bug has been fixed; result 47.")
+    score = evaluate([EvaluationObservation(case=case, state=state, latency_ms=1)]).cases[0]
+    assert not score.success
+    assert not score.language_match
 
 
 def test_duplicate_case_ids_are_rejected(tmp_path: Path) -> None:

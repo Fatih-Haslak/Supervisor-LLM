@@ -1,10 +1,12 @@
 from collections.abc import Sequence
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 import pytest
 
 from app.agents.chat import automatic_mode, run_chat
 from app.llm.schemas import ChatMessage, LLMResponse
+from app.memory.store import MemoryInput, SQLiteMemoryStore
 from app.orchestration.state import AgentState
 from app.security.approvals import Approver
 from app.service.conversations import SQLiteConversationStore
@@ -28,6 +30,7 @@ def test_automatic_mode_keeps_personal_chat_out_of_planner() -> None:
     assert automatic_mode("Benim adım neydi?") == "chat"
     assert automatic_mode("3+44 kaç eder?") == "single"
     assert automatic_mode("workspace/sales.csv dosyasını analiz et") == "supervisor"
+    assert automatic_mode("FATİH TEKKE KİMDİR?") == "supervisor"
 
 
 @pytest.mark.asyncio
@@ -94,3 +97,18 @@ async def test_conversation_survives_task_manager_restart(tmp_path: Path) -> Non
         assert await manager.conversation(first.conversation_id) == []
     finally:
         await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_sqlite_stores_release_files_on_windows() -> None:
+    with TemporaryDirectory(prefix="agent-store-test-") as temporary:
+        root = Path(temporary)
+        conversations = SQLiteConversationStore(root / "conversations.sqlite3")
+        memories = SQLiteMemoryStore(root / "memory.sqlite3")
+        await conversations.append("session", "Merhaba", "Selam")
+        assert len(await conversations.list("session")) == 2
+        await memories.save(MemoryInput(key="language", value="Turkish"))
+        assert len(await memories.list()) == 1
+        await conversations.delete("session")
+        await memories.delete("language")
+    assert not root.exists()

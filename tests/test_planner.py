@@ -112,6 +112,9 @@ async def test_planned_supervisor_passes_first_result_to_second_worker(tmp_path:
             '{"action":"use_tool","tool":"search",'
             '"arguments":{"query":"Proje kodu"}}',
             '{"action":"final_answer","answer":"source.txt: Proje kodu MAVİ"}',
+            '{"action":"use_tool","tool":"file_read",'
+            '"arguments":{"path":"source.txt"}}',
+            '{"action":"final_answer","answer":"source.txt: Proje kodu MAVİ"}',
             '{"action":"use_tool","tool":"file_write",'
             '"arguments":{"path":"report.txt","content":"MAVİ"}}',
             '{"action":"final_answer","answer":"report.txt yazıldı"}',
@@ -131,6 +134,6 @@ async def test_planned_supervisor_passes_first_result_to_second_worker(tmp_path:
     ]
     assert state.pending_tasks == []
     assert [output.agent for output in state.agent_outputs] == ["researcher", "file_agent"]
-    assert [call.tool for call in state.tool_results] == ["search", "file_write"]
-    assert "MAVİ" in llm.requests[3][-1].content
+    assert [call.tool for call in state.tool_results] == ["search", "file_read", "file_write"]
+    assert "MAVİ" in llm.requests[5][-1].content
     assert state.final_answer == "Kod MAVİ; rapor yazıldı."

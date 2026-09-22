@@ -2,7 +2,7 @@
 
 import json
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -23,7 +23,9 @@ class RouteDecision(BaseModel):
 
 
 class PlannedSupervisor(Protocol):
-    async def run_planned(self, user_request: str) -> AgentState: ...
+    async def run_planned(
+        self, user_request: str, *, history: Sequence[ChatMessage] = ()
+    ) -> AgentState: ...
 
 
 class Router:
@@ -102,7 +104,9 @@ class Router:
                 )
         raise AssertionError("Unreachable retry state")
 
-    async def run(self, user_request: str) -> AgentState:
+    async def run(
+        self, user_request: str, *, history: Sequence[ChatMessage] = ()
+    ) -> AgentState:
         request = user_request.strip()
         try:
             decision = await self.decide(request)
@@ -113,6 +117,7 @@ class Router:
             decision.agent != "supervisor"
             and decision.confidence >= self._threshold
             and not self._explicit_sequence(request)
+            and not history
             and not (self._review_code_with_supervisor and decision.agent == "coder")
         ):
             selected = decision.agent
@@ -122,7 +127,7 @@ class Router:
             selected_agent=selected,
         )
         if selected == "supervisor":
-            state = await self._supervisor.run_planned(request)
+            state = await self._supervisor.run_planned(request, history=history)
             state.route = route
             return state
 

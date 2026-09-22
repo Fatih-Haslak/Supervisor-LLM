@@ -24,18 +24,23 @@ WORKER_POLICIES: dict[ModelRole, WorkerPolicy] = {
         allowed_tools=frozenset({"calculator", "file_read", "file_write", "directory_list"}),
     ),
     "researcher": WorkerPolicy(
-        description="Find and summarize facts in local workspace documents; no internet access.",
+        description="Search local documents or look up public facts on Turkish Wikipedia.",
         instructions=(
-            "Search local workspace documents, then read relevant files. Give file paths "
-            "for claims. You have no web search; do not present unverified external facts "
-            "as researched findings. If search returns [], report that no local match was "
-            "found. Do not keep searching unrelated words."
+            "For a public person or encyclopedic question, call wikipedia_lookup with "
+            "only the public topic title. Answer in 2-4 short Turkish sentences; "
+            "cite its returned URL and keep facts within its extract. "
+            "For workspace questions, search local documents and then read a "
+            "matching file with file_read. Preserve exact codes and names. If no source "
+            "is available, say that you cannot verify the answer; never claim a person "
+            "does not exist. Do not send private workspace content to Wikipedia."
         ),
-        allowed_tools=frozenset({"search", "file_read"}),
+        allowed_tools=frozenset({"search", "file_read", "wikipedia_lookup"}),
     ),
     "coder": WorkerPolicy(
         description="Inspect, revise, and test small Python functions inside workspace.",
         instructions=(
+            "When the original request contains inline Python code and the assigned task "
+            "says to analyze it directly, analyze that code without file or test tools. "
             "Inspect the target code and JSON test cases before editing. "
             "After the change, call function_test with the code and test paths. "
             "Report exact pass/fail counts. The function_test tool supports only "
@@ -78,11 +83,16 @@ WORKER_POLICIES: dict[ModelRole, WorkerPolicy] = {
 
 def build_workers(
     llm: LLMClient, registry: ToolRegistry, *, allow_python: bool = False,
+    allow_web: bool = False,
     model_for_role: Callable[[ModelRole], LLMClient] | None = None,
 ) -> dict[str, Worker]:
     workers: dict[str, Worker] = {}
     for name, policy in WORKER_POLICIES.items():
         allowed = set(policy.allowed_tools)
+        instructions = policy.instructions
+        if name == "researcher" and not allow_web:
+            allowed.discard("wikipedia_lookup")
+            instructions += " Wikipedia lookup is unavailable; do not invent public facts."
         if allow_python and name in {"general", "coder"}:
             allowed.add("python_exec")
         workers[name] = SingleAgentWorker(
@@ -91,11 +101,16 @@ def build_workers(
                 registry,
                 allowed,
                 role_name=name,
-                role_instructions=policy.instructions,
+                role_instructions=instructions,
             )
         )
     return workers
 
 
-def worker_descriptions() -> dict[str, str]:
-    return {name: policy.description for name, policy in WORKER_POLICIES.items()}
+def worker_descriptions(*, allow_web: bool = False) -> dict[str, str]:
+    descriptions: dict[str, str] = {
+        name: policy.description for name, policy in WORKER_POLICIES.items()
+    }
+    if not allow_web:
+        descriptions["researcher"] = "Find facts in local workspace documents only."
+    return descriptions

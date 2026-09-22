@@ -1,25 +1,22 @@
 [
-  {
-    "id": "arithmetic-single",
-    "task": "3+44 işlemini calculator aracıyla hesapla.",
-    "mode": "single",
-    "expected_tools": ["calculator"],
-    "expected_answer_contains": "47"
-  },
-  {
-    "id": "local-numbers-single",
-    "task": "workspace/numbers.txt dosyasını file_read ile oku; içindeki 10 ve 20 sayılarını calculator ile topla. Yalnızca toplamı yaz.",
-    "mode": "single",
-    "fixtures": {"numbers.txt": "10\n20\n"},
-    "expected_tools": ["file_read", "calculator"],
-    "expected_answer_contains": "30"
-  },
-  {
-    "id": "arithmetic-supervisor",
-    "task": "3+44 işlemini hesapla.",
-    "mode": "supervisor",
-    "expected_tools": ["calculator"],
-    "expected_agent": "general",
-    "expected_answer_contains": "47"
-  }
+  {"id":"chat-greeting","task":"Merhaba!","mode":"auto","expected_answer_contains":"Merhaba"},
+  {"id":"chat-name-recall","prior_turns":["Benim adım Deniz. Tanıştığımıza memnun oldum."],"task":"Adım neydi?","mode":"auto","expected_answer_contains":"Deniz"},
+  {"id":"chat-assistant-identity","task":"Senin adın ne?","mode":"auto","expected_answer_contains":"Yerel Agent"},
+  {"id":"chat-public-question","task":"FATİH TEKKE KİMDİR?","mode":"auto","expected_tools":["wikipedia_lookup"],"expected_agent":"researcher","expected_answer_contains":"futbol","forbidden_answer_contains":["bilinen bir kişi değil","tanınmıyor","böyle biri yok"]},
+  {"id":"chat-public-lowercase","task":"fatih tekke kimdir","mode":"auto","expected_tools":["wikipedia_lookup"],"expected_agent":"researcher","expected_answer_contains":"futbol","forbidden_answer_contains":["bilinen bir kişi değil","tanınmıyor","böyle biri yok","bilgi bulamadım"]},
+  {"id":"chat-public-natural-question","task":"Bilmiyorumda benim için Fatih Terim kimdir araştırır mısın","mode":"auto","expected_tools":["wikipedia_lookup"],"expected_agent":"researcher","expected_answer_contains":"teknik direktör","forbidden_answer_contains":["bilinen bir kişi değil","tanınmıyor","böyle biri yok"]},
+  {"id":"chat-file-followup","prior_turns":["workspace/note.txt dosyasını oku ve özetle."],"task":"Az önce okuduğun dosyada hangi renk vardı?","mode":"auto","fixtures":{"note.txt":"Kutunun rengi mavidir.\n"},"expected_answer_contains":"mavi"},
+  {"id":"auto-calculator","task":"3+44 kaç eder?","mode":"auto","expected_tools":["calculator"],"expected_answer_contains":"47"},
+  {"id":"auto-file-read","task":"workspace/note.txt dosyasını oku ve içindeki kodu söyle.","mode":"auto","fixtures":{"note.txt":"Kod: MAVİ-42\n"},"expected_tools":["file_read"],"expected_agent":"file_agent","expected_answer_contains":"MAVİ-42"},
+  {"id":"auto-local-research","task":"workspace belgelerinde Orion proje kodunu ara ve geçtiği dosyayı söyle.","mode":"auto","fixtures":{"brief.txt":"Proje kodu Orion-17 olarak kaydedildi.\n"},"expected_tools":["search","file_read"],"expected_agent":"researcher","expected_answer_contains":"Orion-17"},
+  {"id":"auto-csv-analysis","task":"workspace/sales.csv dosyasındaki amount sütununu analiz et. Sayı, toplam ve ortalamayı söyle.","mode":"auto","fixtures":{"sales.csv":"amount\n80\n120\n200\n100\n"},"expected_tools":["csv_summary"],"expected_agent":"data_agent","expected_answer_contains":"500"},
+  {"id":"auto-analysis-report","task":"workspace/sales.csv dosyasındaki amount sütununu analiz et; sonuçları workspace/report.md dosyasına yaz.","mode":"auto","fixtures":{"sales.csv":"amount\n80\n120\n200\n100\n"},"expected_tools":["csv_summary","file_write"],"expected_agent":"data_agent","expected_answer_contains":"report.md","expected_file_contains":{"report.md":"500"}},
+  {"id":"auto-directory-list","task":"workspace klasöründeki dosyaları listele.","mode":"auto","fixtures":{"sample.txt":"Merhaba\n"},"expected_tools":["directory_list"],"expected_agent":"file_agent","expected_answer_contains":"sample.txt"},
+  {"id":"auto-missing-file","task":"workspace/missing.txt dosyasını oku; yoksa bulunamadığını söyle.","mode":"auto","expected_tools":["file_read"],"expected_agent":"file_agent","expected_answer_contains":"bulunamadı"},
+  {"id":"auto-code-fix","task":"workspace/buggy_math.py içindeki add hatasını düzelt, workspace/buggy_math_tests.json vakalarıyla test et.","mode":"auto","fixtures":{"buggy_math.py":"def add(a, b):\n    return a - b\n","buggy_math_tests.json":"{\"function\":\"add\",\"cases\":[{\"args\":[2,3],\"expected\":5},{\"args\":[-4,7],\"expected\":3}]}"},"expected_tools":["file_read","file_write","function_test"],"expected_agent":"coder","expected_answer_contains":"2","expected_file_contains":{"buggy_math.py":"return a + b"}},
+  {"id":"auto-inline-code-analysis","task":"```python\ndef fibonacci(n):\n    if n <= 0:\n        return 0\n    elif n == 1:\n        return 1\n    return fibonacci(n-1) + fibonacci(n-2)\n\nn = 10\nprint(f\"Fibonacci({n}) = {fibonacci(n)}\")\nbu kodu analiz et","mode":"auto","expected_agent":"coder","expected_answer_contains":"Fibonacci","forbidden_tools":["file_read","file_write","function_test"]},
+  {"id":"single-calculator","task":"3+44 işlemini calculator ile hesapla.","mode":"single","expected_tools":["calculator"],"expected_answer_contains":"47"},
+  {"id":"planned-supervisor-calculator","task":"3+44 işlemini hesapla.","mode":"plan","expected_tools":["calculator"],"expected_agent":"general","expected_answer_contains":"47"},
+  {"id":"router-calculator","task":"3+44 işlemini hesapla.","mode":"router","expected_tools":["calculator"],"expected_agent":"general","expected_answer_contains":"47"},
+  {"id":"graph-calculator","task":"3+44 işlemini hesapla.","mode":"graph","expected_tools":["calculator"],"expected_agent":"general","expected_answer_contains":"47"}
 ]

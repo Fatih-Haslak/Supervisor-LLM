@@ -3,6 +3,7 @@
 import asyncio
 import re
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 from typing import Literal
 
@@ -42,7 +43,7 @@ class SQLiteMemoryStore:
         if self.path.is_relative_to(Path("workspace").resolve()):
             raise ValueError("Memory database must be outside workspace")
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        with self._connect() as connection:
+        with closing(self._connect()) as connection, connection:
             connection.execute(
                 "CREATE TABLE IF NOT EXISTS memories ("
                 "key TEXT PRIMARY KEY, value TEXT NOT NULL, category TEXT NOT NULL, "
@@ -53,7 +54,7 @@ class SQLiteMemoryStore:
         return sqlite3.connect(self.path, timeout=5)
 
     def _save(self, item: MemoryInput) -> MemoryEntry:
-        with self._connect() as connection:
+        with closing(self._connect()) as connection, connection:
             connection.execute(
                 "INSERT INTO memories (key, value, category) VALUES (?, ?, ?) "
                 "ON CONFLICT(key) DO UPDATE SET value=excluded.value, "
@@ -71,7 +72,7 @@ class SQLiteMemoryStore:
         return await asyncio.to_thread(self._save, item)
 
     def _list(self, limit: int) -> list[MemoryEntry]:
-        with self._connect() as connection:
+        with closing(self._connect()) as connection, connection:
             rows = connection.execute(
                 "SELECT key, value, category, updated_at FROM memories "
                 "ORDER BY updated_at DESC, key ASC LIMIT ?",
@@ -88,7 +89,7 @@ class SQLiteMemoryStore:
         return await asyncio.to_thread(self._list, limit)
 
     def _delete(self, key: str) -> bool:
-        with self._connect() as connection:
+        with closing(self._connect()) as connection, connection:
             result = connection.execute("DELETE FROM memories WHERE key = ?", (key,))
             return result.rowcount > 0
 

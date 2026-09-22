@@ -17,7 +17,7 @@
     <main>
       <section class="intro" aria-labelledby="page-title">
         <h1 id="page-title">Sohbet et. Gerektiğinde agent'lar çalışsın.</h1>
-        <p>Bu sohbetin geçmişi yerel olarak saklanır. Dosya ve çok adımlı görevlerde supervisor uzman agent'lara geçer.</p>
+        <p>Bu sohbetin geçmişi yerel olarak saklanır. Dosya ve çok adımlı görevlerde supervisor uzman agent'lara geçer. Kamuya açık bilgi sorularında başlık Wikipedia'ya gönderilebilir.</p>
         <p class="architecture">Sen → Supervisor → Uzman agent + araçlar → Reviewer → Tek yanıt</p>
       </section>
 
@@ -55,7 +55,7 @@
             <div id="chat-history" class="chat-history" aria-live="polite"><p class="empty">İlk mesajını yaz.</p></div>
           </section>
           <div class="monitor-heading">
-            <div><h2 id="monitor-heading">Çalışma akışı</h2><p id="task-id">Henüz görev yok</p></div>
+            <div><h2 id="monitor-heading">Canlı görev haritası</h2><p id="task-id">Henüz görev yok</p></div>
             <span id="status" class="status" aria-live="polite">Hazır</span>
           </div>
           <p id="ui-error" class="error" role="alert" hidden></p>
@@ -68,19 +68,42 @@
               <button id="deny-button" type="button" class="secondary">Reddet</button>
             </div>
           </section>
-          <ol id="timeline" class="timeline" aria-label="Agent olayları"><li class="empty">Görevi başlatınca olaylar burada görünecek.</li></ol>
-          <section class="results" aria-labelledby="agents-heading">
-            <h3 id="agents-heading">Plan ve agent çıktıları</h3>
-            <div id="agents" class="result-list"><p class="empty">Henüz agent çıktısı yok.</p></div>
+          <section class="flow-panel" aria-labelledby="flow-title">
+            <div class="flow-intro">
+              <div>
+                <h3 id="flow-title">Görev hangi aşamada?</h3>
+                <p id="flow-summary" aria-live="polite">Mesaj gönderdiğinde izlenen yol burada görünecek.</p>
+              </div>
+              <div class="flow-legend" aria-label="Durum açıklamaları">
+                <span><i class="legend-dot active"></i>Çalışıyor</span>
+                <span><i class="legend-dot done"></i>Tamamlandı</span>
+                <span><i class="legend-dot skipped"></i>Gerekmedi</span>
+              </div>
+            </div>
+            <div id="flow-graph" class="flow-graph" aria-label="Agent görev akışı">
+              <p class="flow-empty">İlk görev henüz başlamadı.</p>
+            </div>
           </section>
-          <section class="results" aria-labelledby="results-heading">
-            <h3 id="results-heading">Araç çağrıları ve sonuçları</h3>
-            <div id="tools" class="result-list"><p class="empty">Henüz araç kullanılmadı.</p></div>
-          </section>
-          <section class="results" aria-labelledby="reviews-heading">
-            <h3 id="reviews-heading">İnceleme</h3>
-            <div id="reviews" class="result-list"><p class="empty">Henüz inceleme yok.</p></div>
-          </section>
+
+          <details class="event-log">
+            <summary>Teknik olay günlüğünü göster</summary>
+            <ol id="timeline" class="timeline" aria-label="Agent olayları"><li class="empty">Görevi başlatınca olaylar burada görünecek.</li></ol>
+          </details>
+
+          <div class="inspection-grid">
+            <details class="results" aria-labelledby="agents-heading">
+              <summary><span id="agents-heading">Plan ve agent çıktıları</span></summary>
+              <div id="agents" class="result-list"><p class="empty">Henüz agent çıktısı yok.</p></div>
+            </details>
+            <details class="results" aria-labelledby="results-heading">
+              <summary><span id="results-heading">Araç çağrıları ve sonuçları</span></summary>
+              <div id="tools" class="result-list"><p class="empty">Henüz araç kullanılmadı.</p></div>
+            </details>
+            <details class="results" aria-labelledby="reviews-heading">
+              <summary><span id="reviews-heading">Reviewer incelemesi</span></summary>
+              <div id="reviews" class="result-list"><p class="empty">Henüz inceleme yok.</p></div>
+            </details>
+          </div>
           <section class="answer" aria-labelledby="answer-heading">
             <h3 id="answer-heading">Son yanıt</h3>
             <p id="answer-text" class="empty">Görev tamamlandığında burada görünecek.</p>

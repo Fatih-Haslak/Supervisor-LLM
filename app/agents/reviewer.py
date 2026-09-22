@@ -26,6 +26,17 @@ _METRIC_LABELS = {
 }
 
 
+def _inline_code(request: str) -> str | None:
+    match = re.search(
+        r"```(?:python)?\s*(.*?)(?:```|$)", request,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    if match is None:
+        return None
+    code = match.group(1).strip()
+    return code[:4000] if code else None
+
+
 def _report_metric_issues(report: str, summary: CsvSummary) -> list[str]:
     found: dict[str, Decimal] = {}
     rows = [
@@ -111,7 +122,8 @@ class ReviewerAgent:
         paths = list(
             dict.fromkeys(path for path in reversed(paths_found) if isinstance(path, str))
         )[:3]
-        if not paths:
+        inline_code = _inline_code(user_request)
+        if not paths and inline_code is None:
             return ReviewResult(
                 verdict=ReviewVerdict(
                     status="fail", issues=["No workspace file evidence available for review"]
@@ -248,6 +260,7 @@ class ReviewerAgent:
             "user_request": user_request,
             "assigned_task": task,
             "worker_answer": worker_result.answer[:4000],
+            "inline_code": inline_code,
             "tool_results": [
                 {"tool": call.tool, "success": call.result.success,
                  "error_type": call.result.error_type}
@@ -271,7 +284,9 @@ class ReviewerAgent:
                     "Use the actual written file contents as evidence. Do not claim tests ran "
                     "unless the tool results show it. Return only JSON with status pass/fail "
                     "and an issues list. For pass, issues must be empty; for fail, give "
-                    "specific actionable issues. Do not modify files."
+                    "specific actionable issues. When inline_code is present and there is no "
+                    "workspace file, review the worker's explanation directly against that "
+                    "inline source; workspace file evidence is not required. Do not modify files."
                 ),
             ),
             ChatMessage(role="user", content=json.dumps(evidence, ensure_ascii=False)),

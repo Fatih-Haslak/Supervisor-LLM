@@ -14,6 +14,7 @@ _TASK_CUES = re.compile(
     flags=re.IGNORECASE,
 )
 _ARITHMETIC = re.compile(r"\d\s*[-+*/]\s*\d")
+_PUBLIC_FACT = re.compile(r"\b(?:kimdir|kimdi|nedir)\b", flags=re.IGNORECASE)
 _USER_NAME = re.compile(
     r"(?:^|[,.!?]\s*)(?:benim\s+)?(?:adım|ismim)\s+"
     r"(?!ne(?:ydi|dir)?\b|kim\b)"
@@ -36,6 +37,8 @@ def automatic_mode(message: str) -> str:
         return "supervisor"
     if _ARITHMETIC.search(message):
         return "single"
+    if _PUBLIC_FACT.search(message):
+        return "supervisor"
     return "chat"
 
 
@@ -67,6 +70,9 @@ async def run_chat(
             "Adın Yerel Agent; başka bir ad uydurma. Doğal ve dilbilgisi düzgün "
             "Türkçe kullan. Önceki konuşma mesajlarını takip et. Kullanıcı adını söylediyse "
             "sonraki sorularda aynen hatırla. Bilmediğin bilgiyi uydurma. "
+            "Kişi hakkında soru gelirse bilinen temel bilgiyi kısa ver; emin olmadığın "
+            "ayrıntılarda belirsizliği belirt. Birini tanımıyorsan 'tanınmıyor' veya "
+            "'böyle biri yok' diye iddia etme; yalnızca bilmediğini söyle. "
             "Kısa sohbet sorularına doğrudan, doğal Türkçe yanıt ver."
         ),
     )

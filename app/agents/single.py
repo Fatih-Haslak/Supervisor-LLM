@@ -1,6 +1,7 @@
 """Bounded single-agent decision and tool execution loop."""
 
 import json
+import re
 from collections.abc import Collection, Sequence
 
 from pydantic import BaseModel
@@ -29,6 +30,43 @@ class RepeatedToolError(Exception):
         self.error_type = error_type
         self.state = state
         super().__init__(error_type)
+
+
+def _public_title_from_request(request: str) -> str | None:
+    original = re.search(
+        r"^Original user request \(context only\): ([^\n]+)",
+        request, flags=re.MULTILINE,
+    )
+    source = original.group(1) if original else request
+    matches = list(re.finditer(
+        r"([^?\n]{2,120}?)\s+(?:kimdir|kimdi|nedir)\b",
+        source, flags=re.IGNORECASE,
+    ))
+    if matches:
+        title = re.sub(r"\([^)]{0,50}\)", " ", matches[-1].group(1))
+        title = re.sub(r"\s+(?:olan|hakkında)\s*$", "", title, flags=re.IGNORECASE)
+        leaders = re.compile(
+            r"^(?:bilmiyorum(?:da)?|peki|acaba|lütfen|bana|şu|benim\s+için)\s+",
+            flags=re.IGNORECASE,
+        )
+        while leaders.search(title.strip()):
+            title = leaders.sub("", title.strip(), count=1)
+        words = re.findall(r"[A-Za-zÇĞİÖŞÜçğıöşü][A-Za-zÇĞİÖŞÜçğıöşü'-]*", title)
+        title = " ".join(words[-4:])
+        if 2 <= len(title) <= 120:
+            return title
+    return None
+
+
+def _local_search_fallback(request: str) -> str | None:
+    original = re.search(
+        r"^Original user request \(context only\): ([^\n]+)",
+        request, flags=re.MULTILINE,
+    )
+    source = original.group(1) if original else request
+    candidates = re.findall(r"\b[A-ZÇĞİÖŞÜ][\w-]{2,}\b", source)
+    ignored = {"original", "assigned", "workspace", "lütfen", "dosya"}
+    return next((word for word in candidates if word.casefold() not in ignored), None)
 
 
 class AgentRunResult(BaseModel):
@@ -98,8 +136,18 @@ class SingleAgent:
             ),
         )
 
-    def _tool_arguments(self, tool: str, arguments: dict[str, object]) -> dict[str, object]:
+    def _tool_arguments(
+        self, tool: str, arguments: dict[str, object], user_request: str
+    ) -> dict[str, object]:
         normalized = dict(arguments)
+        if tool == "wikipedia_lookup":
+            title = normalized.get("title") or normalized.get("query")
+            inferred = _public_title_from_request(user_request)
+            if (not isinstance(title, str) or not title.strip()
+                    or re.search(r"\b(?:kimdir|kimdi|nedir)\b|[?]", title,
+                                 flags=re.IGNORECASE)):
+                title = inferred
+            normalized = {"title": title} if title else {}
         if self._role_name == "writer" and tool == "file_write":
             path = normalized.get("path")
             content = normalized.get("content")
@@ -130,11 +178,64 @@ class SingleAgent:
             )
             state.messages.append(ChatMessage(role="assistant", content=decision.model_dump_json()))
             if isinstance(decision, FinalAnswerDecision):
+                if (
+                    self._role_name == "researcher"
+                    and re.search(r"\b(?:kimdir|kimdi|nedir)\b", user_request,
+                                  flags=re.IGNORECASE)
+                    and any(spec.name == "wikipedia_lookup" for spec in
+                            self._registry.specs(self._allowed_tools))
+                    and not any(call.tool == "wikipedia_lookup" for call in state.tool_results)
+                ):
+                    state.messages.append(ChatMessage(
+                        role="user",
+                        content=(
+                            "Public fact lookup was not attempted. Call wikipedia_lookup "
+                            "with only the public topic title before answering."
+                        ),
+                    ))
+                    continue
+                if (
+                    self._role_name == "coder"
+                    and "function_test" in self._allowed_tools
+                    and re.search(r"\.json\b", user_request, flags=re.IGNORECASE)
+                    and any(call.tool == "file_write" and call.result.success
+                            for call in state.tool_results)
+                    and not any(call.tool == "function_test" and call.result.success
+                                for call in state.tool_results)
+                ):
+                    state.messages.append(ChatMessage(
+                        role="user",
+                        content=(
+                            "Code was changed, but the requested JSON test suite was not run. "
+                            "Call function_test with the code path and JSON tests_path "
+                            "before returning final_answer."
+                        ),
+                    ))
+                    continue
+                if self._role_name == "researcher":
+                    searched = any(
+                        call.tool == "search" and call.result.success
+                        and call.result.output not in {None, "[]"}
+                        for call in state.tool_results
+                    )
+                    read = any(
+                        call.tool == "file_read" and call.result.success
+                        for call in state.tool_results
+                    )
+                    if searched and not read:
+                        state.messages.append(ChatMessage(
+                            role="user",
+                            content=(
+                                "Search found a candidate. Before answering, use file_read "
+                                "on a matching path and preserve the exact matched value."
+                            ),
+                        ))
+                        continue
                 state.finish(decision.answer)
                 return AgentRunResult(state=state)
             if len(state.tool_results) >= self._max_tool_calls:
                 raise AgentLimitError("Maximum tool calls reached", state)
-            arguments = self._tool_arguments(decision.tool, decision.arguments)
+            arguments = self._tool_arguments(decision.tool, decision.arguments, user_request)
             result = await self._registry.execute(decision.tool, arguments, self._allowed_tools)
             if result.error_type in {"ApprovalRequired", "ApprovalDenied"}:
                 raise ToolApprovalError(result.error_type)
@@ -145,6 +246,35 @@ class SingleAgent:
                     result=result,
                 )
             )
+            if (self._role_name == "researcher" and decision.tool == "search"
+                    and result.success and result.output == "[]"
+                    and len(state.tool_results) < self._max_tool_calls):
+                fallback = _local_search_fallback(user_request)
+                query = arguments.get("query")
+                if (fallback and isinstance(query, str)
+                        and fallback.casefold() != query.casefold()):
+                    retry_arguments = {"query": fallback, "path": arguments.get("path", ".")}
+                    retry_result = await self._registry.execute(
+                        "search", retry_arguments, self._allowed_tools
+                    )
+                    state.tool_results.append(ToolCallRecord(
+                        tool="search", arguments=retry_arguments, result=retry_result
+                    ))
+                    if retry_result.success and retry_result.output != "[]":
+                        result = retry_result
+            if (self._role_name == "researcher" and decision.tool == "wikipedia_lookup"
+                    and result.error_type in {"NoArticle", "LookupUnavailable"}):
+                state.finish(
+                    "Bu konuda Wikipedia kaynağına erişip bilgiyi doğrulayamadım. "
+                    "Doğrulanmamış kişi veya güncel görev bilgisi vermiyorum."
+                )
+                return AgentRunResult(state=state)
+            if decision.tool == "wikipedia_lookup" and result.error_type == "InvalidArguments":
+                state.finish(
+                    "Araştırılacak kişi veya konu adını çıkaramadım. "
+                    "Lütfen kişi veya konu adını açıkça yazın."
+                )
+                return AgentRunResult(state=state)
             if result.error_type is not None:
                 error_counts[result.error_type] = error_counts.get(result.error_type, 0) + 1
                 limit = 2 if result.error_type == "PermissionDenied" else 3

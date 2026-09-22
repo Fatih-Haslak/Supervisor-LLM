@@ -14,8 +14,8 @@ from pydantic import BaseModel, ConfigDict, Field
 EventName = Literal[
     "task_started", "task_completed", "task_failed", "agent_enter", "agent_exit",
     "agent_error",
-    "model_call", "model_error", "model_retry", "tool_call",
-    "review_verdict", "route_selected",
+    "model_call", "model_error", "model_retry", "plan_fallback", "tool_call",
+    "review_verdict", "route_selected", "mode_selected",
     "approval_requested", "approval_resolved",
 ]
 _active: ContextVar["TraceRecorder | None"] = ContextVar("active_trace", default=None)
@@ -37,6 +37,7 @@ class TraceEvent(BaseModel):
     sequence: int = Field(ge=1)
     event: EventName
     agent: str | None = None
+    mode: Literal["chat", "single", "supervisor", "plan"] | None = None
     tool: str | None = None
     success: bool | None = None
     duration_ms: float | None = Field(default=None, ge=0)
@@ -59,7 +60,9 @@ class TraceRecorder:
         self.dropped = 0
 
     def record(
-        self, event: EventName, *, agent: str | None = None, tool: str | None = None,
+        self, event: EventName, *, agent: str | None = None,
+        mode: Literal["chat", "single", "supervisor", "plan"] | None = None,
+        tool: str | None = None,
         success: bool | None = None, duration_ms: float | None = None,
         prompt_chars: int | None = None, response_chars: int | None = None,
         prompt_tokens: int | None = None, completion_tokens: int | None = None,
@@ -72,6 +75,7 @@ class TraceRecorder:
             TraceEvent(
                 task_id=self.task_id, trace_id=self.trace_id,
                 sequence=len(self.events) + 1, event=event, agent=_name(agent),
+                mode=mode,
                 tool=_name(tool), success=success, duration_ms=duration_ms,
                 prompt_chars=prompt_chars, response_chars=response_chars,
                 prompt_tokens=prompt_tokens, completion_tokens=completion_tokens,
@@ -95,7 +99,9 @@ def current_task_id() -> str:
 
 
 def record(
-    event: EventName, *, agent: str | None = None, tool: str | None = None,
+    event: EventName, *, agent: str | None = None,
+    mode: Literal["chat", "single", "supervisor", "plan"] | None = None,
+    tool: str | None = None,
     success: bool | None = None, duration_ms: float | None = None,
     prompt_chars: int | None = None, response_chars: int | None = None,
     prompt_tokens: int | None = None, completion_tokens: int | None = None,
@@ -104,7 +110,7 @@ def record(
     active = _active.get()
     if active is not None:
         active.record(
-            event, agent=agent, tool=tool, success=success,
+            event, agent=agent, mode=mode, tool=tool, success=success,
             duration_ms=duration_ms, prompt_chars=prompt_chars,
             response_chars=response_chars, prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens, retry_count=retry_count,

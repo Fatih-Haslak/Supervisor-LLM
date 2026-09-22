@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     llm_max_tokens: int = Field(default=512, ge=1, le=8192)
     llm_timeout_seconds: float = Field(default=120, gt=0, le=600)
     llm_temperature: float = Field(default=0.2, ge=0, le=2)
+    web_lookup_enabled: bool = True
     log_level: str = "INFO"
 
     @field_validator("model_path")

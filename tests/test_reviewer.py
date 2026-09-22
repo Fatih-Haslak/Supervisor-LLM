@@ -113,6 +113,21 @@ async def test_reviewer_requires_file_evidence(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_reviewer_accepts_inline_code_as_analysis_evidence(tmp_path: Path) -> None:
+    root = tmp_path / "workspace"
+    root.mkdir()
+    llm = ScriptedLLM(['{"status":"pass","issues":[]}'])
+    result = await ReviewerAgent(llm, make_registry(root)).review(
+        "```python\ndef fibonacci(n):\n    return n\n```\nbu kodu analiz et",
+        "Verilen Python kodunu analiz et",
+        WorkerResult(answer="Fonksiyon n değerini doğrudan döndürüyor."),
+    )
+    assert result.verdict.status == "pass"
+    assert result.tool_calls == []
+    assert llm.calls == 1
+
+
+@pytest.mark.asyncio
 async def test_reviewer_can_read_file_written_by_earlier_worker(tmp_path: Path) -> None:
     root = tmp_path / "workspace"
     root.mkdir()

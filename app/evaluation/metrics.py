@@ -1,5 +1,6 @@
 """Pure evaluation contracts and aggregate metrics."""
 
+import re
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -13,10 +14,15 @@ class EvaluationCase(BaseModel):
 
     id: str = Field(pattern=r"^[a-z][a-z0-9_-]{1,63}$")
     task: str = Field(min_length=1, max_length=2000)
-    mode: Literal["single", "supervisor", "graph"] = "single"
+    mode: Literal["auto", "single", "supervisor", "plan", "router", "graph"] = "auto"
+    prior_turns: list[str] = Field(default_factory=list, max_length=8)
     expected_tools: list[str] = Field(default_factory=list)
+    forbidden_tools: list[str] = Field(default_factory=list)
     expected_agent: str | None = None
     expected_answer_contains: str = Field(min_length=1)
+    forbidden_answer_contains: list[str] = Field(default_factory=list)
+    expected_language: Literal["tr", "en"] | None = "tr"
+    expected_file_contains: dict[str, str] = Field(default_factory=dict)
     fixtures: dict[str, str] = Field(default_factory=dict, max_length=5)
 
 
@@ -26,6 +32,7 @@ class EvaluationObservation(BaseModel):
     events: list[TraceEvent] = Field(default_factory=list)
     latency_ms: float = Field(ge=0)
     error_code: str | None = None
+    files_match: bool = True
 
 
 class CaseScore(BaseModel):
@@ -34,6 +41,11 @@ class CaseScore(BaseModel):
     tools_match: bool
     route_match: bool | None = None
     error_code: str | None = None
+    files_match: bool = True
+    language_match: bool = True
+    answer: str | None = None
+    actual_tools: list[str] = Field(default_factory=list)
+    actual_agents: list[str] = Field(default_factory=list)
 
 
 class EvaluationReport(BaseModel):
@@ -68,7 +80,10 @@ def evaluate(observations: list[EvaluationObservation]) -> EvaluationReport:
         state = observation.state
         case = observation.case
         actual_tools = {call.tool for call in state.tool_results} if state else set()
-        tools_match = actual_tools == set(case.expected_tools)
+        tools_match = (
+            set(case.expected_tools).issubset(actual_tools)
+            and not actual_tools.intersection(case.forbidden_tools)
+        )
         route_match: bool | None = None
         if case.expected_agent is not None:
             routes_checked += 1
@@ -80,12 +95,33 @@ def evaluate(observations: list[EvaluationObservation]) -> EvaluationReport:
         answered = bool(
             state and state.final_answer and not state.pending_tasks
             and case.expected_answer_contains.casefold() in state.final_answer.casefold()
+            and not any(
+                phrase.casefold() in state.final_answer.casefold()
+                for phrase in case.forbidden_answer_contains
+            )
+        )
+        answer = state.final_answer if state else None
+        english_words = re.findall(
+            r"\b(?:the|has|been|was|were|successfully|passed|fixed|out|of|"
+            r"with|and|this|that|file|function)\b",
+            answer or "", flags=re.IGNORECASE,
+        )
+        language_match = (
+            case.expected_language != "tr" or len(english_words) < 3
+        )
+        success = (
+            answered and tools_match and route_match is not False
+            and observation.files_match and language_match
+            and observation.error_code is None
         )
         scores.append(
             CaseScore(
-                id=case.id, success=answered and tools_match and route_match is not False,
+                id=case.id, success=success,
                 tools_match=tools_match, route_match=route_match,
-                error_code=observation.error_code,
+                error_code=observation.error_code, files_match=observation.files_match,
+                language_match=language_match, answer=answer,
+                actual_tools=[call.tool for call in state.tool_results] if state else [],
+                actual_agents=[output.agent for output in state.agent_outputs] if state else [],
             )
         )
         traced_tool_calls = [

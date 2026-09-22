@@ -1,7 +1,7 @@
 """LangGraph orchestration over the existing supervisor, workers, and reviewer."""
 
 import json
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import Literal, TypedDict, cast
 
 from langchain_core.runnables import RunnableLambda
@@ -117,7 +117,8 @@ class GraphOrchestrator:
                 assignment += (
                     "\nReviewer feedback to fix: "
                     + json.dumps(graph_state["feedback"], ensure_ascii=False)
-                    + "\nRepair existing files with overwrite=true when needed."
+                    + "\nAddress this feedback in the answer or repair existing files "
+                    "with overwrite=true when the task uses workspace files."
                 )
             result = await self._supervisor._run_worker(
                 state, name, assignment,
@@ -180,8 +181,10 @@ class GraphOrchestrator:
     def _after_review(graph_state: GraphState) -> str:
         return graph_state["review_route"]
 
-    async def run(self, user_request: str) -> AgentState:
-        state = self._supervisor._new_state(user_request)
+    async def run(
+        self, user_request: str, *, history: Sequence[ChatMessage] = ()
+    ) -> AgentState:
+        state = self._supervisor._new_state(user_request, history)
         initial: GraphState = {
             "agent_state": state, "next_agent": "", "task": "", "last_result": None,
             "review_attempt": 0, "feedback": [], "review_route": "supervisor",

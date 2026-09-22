@@ -25,10 +25,13 @@ def test_api_task_lifecycle_stream_and_ui() -> None:
     ) as client:
         page = client.get("/")
         assert page.status_code == 200
-        assert "Çalışma akışı" in page.text
+        assert "Canlı görev haritası" in page.text
+        assert 'id="flow-graph"' in page.text
         response = client.post("/tasks", json={"message": "Merhaba", "mode": "single"})
         assert response.status_code == 202
         task_id = response.json()["task_id"]
+        assert response.json()["message"] == "Merhaba"
+        assert response.json()["mode"] == "single"
         for _ in range(100):
             status = client.get(f"/tasks/{task_id}").json()
             if status["status"] == "completed":
@@ -100,3 +103,42 @@ def test_api_exposes_exact_approval_and_accepts_one_decision() -> None:
                 break
             time.sleep(0.01)
         assert status["answer"] == "Onaylandı"
+
+
+def test_api_followup_receives_same_conversation_and_failed_turn() -> None:
+    histories: list[list[str]] = []
+
+    async def runner(
+        message: str, _mode: TaskMode, _approver: Approver,
+        history: list[ChatMessage],
+    ) -> AgentState:
+        histories.append([item.content for item in history])
+        if message == "bozuk":
+            raise ValueError("scripted failure")
+        state = AgentState.for_request(message, ChatMessage(role="system", content="test"))
+        state.finish("Tamam")
+        return state
+
+    with TestClient(
+        create_app(runner), base_url="http://127.0.0.1:8000",
+        client=("127.0.0.1", 51000),
+    ) as client:
+        first = client.post("/tasks", json={"message": "bozuk"}).json()
+        for _ in range(100):
+            failed = client.get(f"/tasks/{first['task_id']}").json()
+            if failed["status"] == "failed":
+                break
+            time.sleep(0.01)
+        assert failed["error"]["code"] == "INVALID_INPUT"
+        second = client.post("/tasks", json={
+            "message": "tekrar dene", "conversation_id": first["conversation_id"]
+        }).json()
+        for _ in range(100):
+            completed = client.get(f"/tasks/{second['task_id']}").json()
+            if completed["status"] == "completed":
+                break
+            time.sleep(0.01)
+        assert second["conversation_id"] == first["conversation_id"]
+        assert completed["answer"] == "Tamam"
+        assert histories[1][0] == "bozuk"
+        assert "Hata [INVALID_INPUT]" in histories[1][1]

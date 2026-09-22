@@ -32,6 +32,8 @@ class TaskView(BaseModel):
 
     task_id: str
     conversation_id: str
+    message: str
+    mode: TaskMode
     status: TaskStatus
     answer: str | None = None
     error: ErrorInfo | None = None
@@ -60,6 +62,7 @@ class TaskRecord:
         state = self.state
         return TaskView(
             task_id=self.recorder.task_id, conversation_id=self.conversation_id,
+            message=self.message, mode=self.mode,
             status=self.status,
             answer=state.final_answer if state is not None else None,
             error=self.error, events=list(self.recorder.events),
@@ -182,6 +185,11 @@ class TaskManager:
                         )
                         if task.state.pending_tasks:
                             task.status = "failed"
+                            task.error = ErrorInfo(
+                                code="INTERNAL_ERROR",
+                                message="Görev tamamlanmadan durdu.",
+                                retryable=True,
+                            )
                             record("task_failed", error_type="IncompleteTask")
                         else:
                             task.status = "completed"
@@ -198,5 +206,22 @@ class TaskManager:
                         task.error = describe_error(exc)
                         task.status = "failed"
                         record("task_failed", error_type=type(exc).__name__)
+                    if task.status == "failed":
+                        if task.state and task.state.final_answer:
+                            failure = task.state.final_answer
+                        elif task.error:
+                            failure = f"Hata [{task.error.code}]: {task.error.message}"
+                        else:
+                            failure = "Görev tamamlanamadı."
+                        try:
+                            await self._conversations.append(
+                                task.conversation_id, task.message, failure
+                            )
+                        except Exception:
+                            task.error = ErrorInfo(
+                                code="STORAGE_FAILURE",
+                                message="Yerel dosya veya bellek erişimi başarısız.",
+                                retryable=False,
+                            )
             finally:
                 self._queue.task_done()

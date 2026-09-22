@@ -43,9 +43,13 @@ class FakeSupervisor:
     def __init__(self) -> None:
         self.calls: list[str] = []
 
-    async def run_planned(self, user_request: str) -> AgentState:
+    async def run_planned(
+        self, user_request: str, *, history: Sequence[ChatMessage] = ()
+    ) -> AgentState:
         self.calls.append(user_request)
         state = AgentState(user_request=user_request, current_agent="supervisor")
+        if history:
+            state.messages = list(history)
         state.finish("Planlı sonuç")
         return state
 
@@ -146,3 +150,16 @@ async def test_invalid_route_falls_back_to_supervisor() -> None:
     assert state.route is not None
     assert state.route.selected_agent == "supervisor"
     assert state.route.confidence == 0
+
+
+@pytest.mark.asyncio
+async def test_router_uses_supervisor_for_conversation_followup() -> None:
+    llm = ScriptedLLM(['{"agent":"general","confidence":0.99}'])
+    worker, supervisor = FakeWorker(), FakeSupervisor()
+    history = [ChatMessage(role="user", content="Kod Orion-17")]
+    state = await Router(llm, {"general": worker}, supervisor).run(
+        "Az önceki kod neydi?", history=history
+    )
+    assert worker.calls == []
+    assert state.route is not None and state.route.selected_agent == "supervisor"
+    assert state.messages[0].content == "Kod Orion-17"

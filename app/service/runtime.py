@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from app.agents.chat import automatic_mode, run_chat
+from app.agents.chat import run_chat
 from app.agents.reviewer import ReviewerAgent
 from app.agents.single import SingleAgent
 from app.agents.supervisor import Supervisor
@@ -15,6 +15,7 @@ from app.memory.context import MemoryAwareLLM
 from app.memory.store import MemoryEntry, SQLiteMemoryStore
 from app.observability.events import agent_span
 from app.observability.llm import TracedLLM
+from app.orchestration.auto_mode import AutoModeRouter
 from app.orchestration.router import Router
 from app.orchestration.state import AgentState
 from app.security.approvals import Approver
@@ -25,13 +26,17 @@ from app.tools.filesystem import DirectoryListTool, FileReadTool, FileWriteTool,
 from app.tools.function_test import FunctionTestTool
 from app.tools.registry import ToolRegistry
 from app.tools.search import SearchTool
+from app.tools.wikipedia import WikipediaLookupTool
 
 
 class AgentRuntime:
-    def __init__(self, settings: Settings, workspace_root: Path) -> None:
+    def __init__(
+        self, settings: Settings, workspace_root: Path,
+        *, client: LlamaCppClient | None = None,
+    ) -> None:
         self._settings = settings
         self._workspace = Workspace(workspace_root)
-        self._client = LlamaCppClient(settings)
+        self._client = client or LlamaCppClient(settings)
         self._memories: list[MemoryEntry] = []
 
     async def __aenter__(self) -> "AgentRuntime":
@@ -54,16 +59,20 @@ class AgentRuntime:
             DirectoryListTool(self._workspace), SearchTool(self._workspace),
         ):
             registry.register(tool)
+        if self._settings.web_lookup_enabled:
+            registry.register(WikipediaLookupTool())
         self._memories = await SQLiteMemoryStore(self._settings.memory_db_path).list()
         strategy = SharedModelStrategy(MemoryAwareLLM(
             TracedLLM(self._client), self._memories
         ))
         if mode == "auto":
-            chosen = automatic_mode(message)
+            chosen = await AutoModeRouter(strategy.for_role("router")).select(
+                message, history
+            )
             if chosen == "chat":
                 with agent_span("chat"):
                     return await run_chat(strategy.for_role("chat"), message, history)
-            mode = "single" if chosen == "single" else "supervisor"
+            mode = chosen
         if mode == "single":
             with agent_span("single"):
                 return (await SingleAgent(
@@ -75,12 +84,16 @@ class AgentRuntime:
                     ),
                 ).run(message, history=history)).state
         workers = build_workers(
-            strategy.for_role("general"), registry, model_for_role=strategy.for_role
+            strategy.for_role("general"), registry,
+            allow_web=self._settings.web_lookup_enabled,
+            model_for_role=strategy.for_role,
         )
         reviewer = ReviewerAgent(strategy.for_role("reviewer"), registry)
         supervisor = Supervisor(
             strategy.for_role("supervisor"), workers, reviewer=reviewer,
-            worker_descriptions=worker_descriptions(),
+            worker_descriptions=worker_descriptions(
+                allow_web=self._settings.web_lookup_enabled
+            ),
             planner_llm=strategy.for_role("planner"),
         )
         if mode == "supervisor":
@@ -90,13 +103,17 @@ class AgentRuntime:
         if mode == "router":
             return await Router(
                 strategy.for_role("router"), workers, supervisor,
-                worker_descriptions=worker_descriptions(),
+                worker_descriptions=worker_descriptions(
+                    allow_web=self._settings.web_lookup_enabled
+                ),
                 review_code_with_supervisor=True,
-            ).run(message)
+            ).run(message, history=history)
         from app.orchestration.graph import GraphOrchestrator
 
         return await GraphOrchestrator(
             strategy.for_role("supervisor"), workers, reviewer=reviewer,
-            worker_descriptions=worker_descriptions(),
+            worker_descriptions=worker_descriptions(
+                allow_web=self._settings.web_lookup_enabled
+            ),
             planner_llm=strategy.for_role("planner"),
-        ).run(message)
+        ).run(message, history=history)

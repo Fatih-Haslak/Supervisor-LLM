@@ -56,6 +56,20 @@ async def test_graph_supervisor_worker_final() -> None:
 
 
 @pytest.mark.asyncio
+async def test_graph_receives_conversation_history() -> None:
+    llm = ScriptedLLM([
+        '{"action":"delegate","next_agent":"general","task":"kodu söyle",'
+        '"reason":"gerekli"}',
+        '{"action":"final_answer","answer":"Orion-17"}',
+    ])
+    history = [ChatMessage(role="user", content="Kod Orion-17 idi")]
+    state = await GraphOrchestrator(llm, {"general": FakeWorker()}).run(
+        "Önceki kodu söyle", history=history
+    )
+    assert "Kod Orion-17 idi" in state.messages[0].content
+
+
+@pytest.mark.asyncio
 async def test_graph_honors_supervisor_round_limit() -> None:
     llm = ScriptedLLM([
         '{"action":"delegate","next_agent":"general","task":"x",'
