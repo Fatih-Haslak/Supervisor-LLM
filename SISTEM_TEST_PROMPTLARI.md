@@ -49,6 +49,14 @@ Bu rehberdeki metinleri `http://127.0.0.1:8000/` arayüzünün **Mesajın** alan
 
 **Beklenen:** `supervisor → researcher → wikipedia_lookup`; yanıt ilgili kişiyi anlatır ve Türkçe Wikipedia bağlantısı verir. Güncel görev/unvan gibi değişebilecek ayrıntıları ayrıca doğrula.
 
+### 04B — Wikipedia'da maddesi olmayan teknik konu
+
+**Prompt:**
+
+> Triton Server'ın işlevini açıklar mısın? Türkçe Wikipedia'da araştır ve bulduğun kaynağı göster.
+
+**Beklenen:** `researcher`, `wikipedia_lookup` aracına boş argüman yerine `{"title":"Triton Server"}` gönderir. Türkçe Wikipedia'da bu başlıkta madde yoksa sonuç `NoArticle` olur; yanıt kaynak yokluğunu açıkça söyler ve bilgi uydurmaz. `InvalidArguments` tekrarı hata kabul edilir. Bu test, genel web araştırmasını doğrulamaz.
+
 ## B. Yerel dosya ve veri araçları
 
 ### 05 — `file_read`

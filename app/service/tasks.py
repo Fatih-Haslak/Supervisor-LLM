@@ -184,13 +184,23 @@ class TaskManager:
                             task.message, task.mode, BrowserApprover(task), history
                         )
                         if task.state.pending_tasks:
+                            review_failed = bool(
+                                task.state.reviews
+                                and task.state.reviews[-1].status == "fail"
+                            )
                             task.status = "failed"
                             task.error = ErrorInfo(
-                                code="INTERNAL_ERROR",
-                                message="Görev tamamlanmadan durdu.",
-                                retryable=True,
+                                code="REVIEW_FAILED" if review_failed else "INTERNAL_ERROR",
+                                message=(
+                                    "Reviewer incelemesi geçilemedi."
+                                    if review_failed else "Görev tamamlanmadan durdu."
+                                ),
+                                retryable=not review_failed,
                             )
-                            record("task_failed", error_type="IncompleteTask")
+                            record(
+                                "task_failed",
+                                error_type="ReviewFailed" if review_failed else "IncompleteTask",
+                            )
                         else:
                             task.status = "completed"
                             if task.state.final_answer:

@@ -3,7 +3,7 @@ import asyncio
 import pytest
 
 from app.llm.schemas import ChatMessage
-from app.orchestration.state import AgentState
+from app.orchestration.state import AgentState, ReviewRecord
 from app.security.approvals import ApprovalRequest, Approver, ToolApprovalError
 from app.service.tasks import TaskManager, TaskMode
 
@@ -116,5 +116,34 @@ async def test_failed_turn_is_visible_to_followup_without_stopping_queue() -> No
         assert manager.get(second.task_id).status == "completed"  # type: ignore[union-attr]
         assert histories[1][0] == "ilk görev"
         assert "Hata [INVALID_INPUT]" in histories[1][1]
+    finally:
+        await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_review_failure_has_specific_error_code() -> None:
+    async def run(
+        message: str, _mode: TaskMode, _approver: Approver,
+        _history: list[ChatMessage],
+    ) -> AgentState:
+        state = AgentState.for_request(
+            message, ChatMessage(role="system", content="test")
+        )
+        state.reviews.append(ReviewRecord(
+            agent="coder", task=message, attempt=3, status="fail",
+            issues=["Test evidence missing"],
+        ))
+        state.fail("İnceleme geçilemedi; görev tamamlanmadı.")
+        return state
+
+    manager = TaskManager(run)
+    await manager.start()
+    try:
+        task = manager.submit("Kod düzelt", "plan")
+        await manager._queue.join()
+        final = manager.get(task.task_id)
+        assert final is not None and final.status == "failed"
+        assert final.error is not None and final.error.code == "REVIEW_FAILED"
+        assert final.answer == "İnceleme geçilemedi; görev tamamlanmadı."
     finally:
         await manager.close()

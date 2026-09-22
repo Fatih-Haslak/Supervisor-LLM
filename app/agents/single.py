@@ -37,25 +37,58 @@ def _public_title_from_request(request: str) -> str | None:
         r"^Original user request \(context only\): ([^\n]+)",
         request, flags=re.MULTILINE,
     )
-    source = original.group(1) if original else request
-    matches = list(re.finditer(
-        r"([^?\n]{2,120}?)\s+(?:kimdir|kimdi|nedir)\b",
-        source, flags=re.IGNORECASE,
-    ))
-    if matches:
-        title = re.sub(r"\([^)]{0,50}\)", " ", matches[-1].group(1))
-        title = re.sub(r"\s+(?:olan|hakkında)\s*$", "", title, flags=re.IGNORECASE)
-        leaders = re.compile(
-            r"^(?:bilmiyorum(?:da)?|peki|acaba|lütfen|bana|şu|benim\s+için)\s+",
-            flags=re.IGNORECASE,
-        )
-        while leaders.search(title.strip()):
-            title = leaders.sub("", title.strip(), count=1)
-        words = re.findall(r"[A-Za-zÇĞİÖŞÜçğıöşü][A-Za-zÇĞİÖŞÜçğıöşü'-]*", title)
-        title = " ".join(words[-4:])
-        if 2 <= len(title) <= 120:
-            return title
+    assigned = re.search(
+        r"^Assigned subtask \(perform only this step\): ([^\n]+)",
+        request, flags=re.MULTILINE,
+    )
+    sources = [match.group(1) for match in (original, assigned) if match]
+    if not sources:
+        sources = [request]
+    proper_word = r"[A-ZÇĞİÖŞÜ][A-Za-zÇĞİÖŞÜçğıöşü0-9.-]*"
+    proper_name = rf"{proper_word}(?:\s+{proper_word}){{0,5}}"
+    for source in sources:
+        for pattern in (
+            rf"(?P<title>{proper_name})\s+hakkında\b",
+            rf"(?P<title>{proper_name})['’](?:ın|in|un|ün|nın|nin|nun|nün|ı|i|u|ü)\b",
+            rf"(?:^|[.!?]\s+)(?P<title>{proper_name})\s*,\s+bir\b",
+        ):
+            for match in re.finditer(pattern, source, flags=re.IGNORECASE):
+                title = match.group("title").strip()
+                if title.casefold() not in {"wikipedia", "türkçe wikipedia"}:
+                    return title
+        matches = list(re.finditer(
+            r"([^?\n]{2,120}?)\s+(?:kimdir|kimdi|nedir)\b",
+            source, flags=re.IGNORECASE,
+        ))
+        if matches:
+            title = re.sub(r"\([^)]{0,50}\)", " ", matches[-1].group(1))
+            title = re.sub(r"\s+(?:olan|hakkında)\s*$", "", title, flags=re.IGNORECASE)
+            leaders = re.compile(
+                r"^(?:bilmiyorum(?:da)?|peki|acaba|lütfen|bana|şu|benim\s+için)\s+",
+                flags=re.IGNORECASE,
+            )
+            while leaders.search(title.strip()):
+                title = leaders.sub("", title.strip(), count=1)
+            words = re.findall(r"[A-Za-zÇĞİÖŞÜçğıöşü][A-Za-zÇĞİÖŞÜçğıöşü'-]*", title)
+            title = " ".join(words[-4:])
+            if 2 <= len(title) <= 120:
+                return title
     return None
+
+
+def _clean_public_title(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    title = value.strip(" \"'?.!")
+    if not 2 <= len(title) <= 120:
+        return None
+    if re.search(r"[/\\\n\r:,;]|['’](?:ın|in|un|ün|nın|nin|nun|nün|ı|i|u|ü)\b|"
+                 r"\b(?:kimdir|kimdi|nedir|hakkında|açıkla|araştır|"
+                 r"toplayın|wikipedia|için)\b", title, flags=re.IGNORECASE):
+        return None
+    if len(title.split()) > 8:
+        return None
+    return title
 
 
 def _local_search_fallback(request: str) -> str | None:
@@ -141,12 +174,11 @@ class SingleAgent:
     ) -> dict[str, object]:
         normalized = dict(arguments)
         if tool == "wikipedia_lookup":
-            title = normalized.get("title") or normalized.get("query")
-            inferred = _public_title_from_request(user_request)
-            if (not isinstance(title, str) or not title.strip()
-                    or re.search(r"\b(?:kimdir|kimdi|nedir)\b|[?]", title,
-                                 flags=re.IGNORECASE)):
-                title = inferred
+            supplied = normalized.get("title") or normalized.get("query")
+            title = _clean_public_title(supplied)
+            if title is None:
+                title = (_public_title_from_request(supplied) if isinstance(supplied, str)
+                         else None) or _public_title_from_request(user_request)
             normalized = {"title": title} if title else {}
         if self._role_name == "writer" and tool == "file_write":
             path = normalized.get("path")
@@ -169,6 +201,7 @@ class SingleAgent:
             )
         state = AgentState.for_request(user_request, system)
         error_counts: dict[str, int] = {}
+        missing_public_title_retries = 0
 
         for step in range(1, self._max_steps + 1):
             state.step_count = step
@@ -236,6 +269,23 @@ class SingleAgent:
             if len(state.tool_results) >= self._max_tool_calls:
                 raise AgentLimitError("Maximum tool calls reached", state)
             arguments = self._tool_arguments(decision.tool, decision.arguments, user_request)
+            if decision.tool == "wikipedia_lookup" and not arguments:
+                if missing_public_title_retries == 0:
+                    missing_public_title_retries += 1
+                    state.messages.append(ChatMessage(
+                        role="user",
+                        content=(
+                            "wikipedia_lookup için arguments içinde yalnızca açık bir "
+                            "kişi veya konu başlığıyla title alanını doldur. "
+                            "Tam soru veya görev cümlesini gönderme."
+                        ),
+                    ))
+                    continue
+                state.finish(
+                    "Araştırılacak kişi veya konu adını çıkaramadım. "
+                    "Lütfen kişi veya konu adını açıkça yazın."
+                )
+                return AgentRunResult(state=state)
             result = await self._registry.execute(decision.tool, arguments, self._allowed_tools)
             if result.error_type in {"ApprovalRequired", "ApprovalDenied"}:
                 raise ToolApprovalError(result.error_type)
@@ -263,7 +313,14 @@ class SingleAgent:
                     if retry_result.success and retry_result.output != "[]":
                         result = retry_result
             if (self._role_name == "researcher" and decision.tool == "wikipedia_lookup"
-                    and result.error_type in {"NoArticle", "LookupUnavailable"}):
+                    and result.error_type == "NoArticle"):
+                state.finish(
+                    "Bu konu için Türkçe Wikipedia'da makale bulamadım; "
+                    "bu kaynaktan bilgi doğrulayamıyorum."
+                )
+                return AgentRunResult(state=state)
+            if (self._role_name == "researcher" and decision.tool == "wikipedia_lookup"
+                    and result.error_type == "LookupUnavailable"):
                 state.finish(
                     "Bu konuda Wikipedia kaynağına erişip bilgiyi doğrulayamadım. "
                     "Doğrulanmamış kişi veya güncel görev bilgisi vermiyorum."

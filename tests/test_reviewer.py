@@ -113,6 +113,30 @@ async def test_reviewer_requires_file_evidence(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_read_only_coder_step_does_not_require_later_function_tests(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "workspace"
+    root.mkdir()
+    (root / "module.py").write_text(
+        "def add(a, b):\n    return a - b\n", encoding="utf-8"
+    )
+    read = ToolCallRecord(
+        tool="file_read", arguments={"path": "module.py"},
+        result=ToolResult.ok("def add(a, b):\n    return a - b\n"),
+    )
+    llm = ScriptedLLM(['{"status":"pass","issues":[]}'])
+    result = await ReviewerAgent(llm, make_registry(root)).review(
+        "module.py hatasını düzelt, function_test ile testleri çalıştır",
+        "module.py dosyasını oku ve hatayı belirle",
+        WorkerResult(answer="Toplama yerine çıkarma kullanılmış.", tool_results=[read]),
+    )
+    assert result.verdict.status == "pass"
+    assert [call.tool for call in result.tool_calls] == ["file_read"]
+    assert llm.calls == 1
+
+
+@pytest.mark.asyncio
 async def test_reviewer_accepts_inline_code_as_analysis_evidence(tmp_path: Path) -> None:
     root = tmp_path / "workspace"
     root.mkdir()

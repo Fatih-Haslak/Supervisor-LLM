@@ -246,6 +246,70 @@ async def test_public_lookup_repairs_natural_question_and_query_argument() -> No
 
 
 @pytest.mark.asyncio
+async def test_public_lookup_extracts_topic_from_research_assignment() -> None:
+    request = (
+        "Original user request (context only): Bu platformun işlevini araştır.\n"
+        "Assigned subtask (perform only this step): Triton Server'ın işlevini "
+        "açıklamak için Wikipedia'dan bilgi toplayın. Triton Server, bir makine "
+        "öğrenimi modeli dağıtım platformudur."
+    )
+    assert _public_title_from_request(request) == "Triton Server"
+    assert _public_title_from_request(
+        "NVIDIA Triton Inference Server'ın işlevi nedir?"
+    ) == "NVIDIA Triton Inference Server"
+    registry = ToolRegistry()
+    registry.register(WikipediaLookupTool(lambda _title: {
+        "query": {"pages": [{"missing": True, "title": "Triton Server"}]}
+    }))
+    llm = ScriptedLLM([
+        '{"action":"use_tool","tool":"wikipedia_lookup","arguments":{}}',
+    ])
+    result = await SingleAgent(
+        llm, registry, {"wikipedia_lookup"}, role_name="researcher"
+    ).run(request)
+    assert result.tool_calls[0].arguments == {"title": "Triton Server"}
+    assert result.tool_calls[0].result.error_type == "NoArticle"
+    assert "Türkçe Wikipedia'da makale bulamadım" in result.answer
+    assert len(result.tool_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_public_lookup_asks_model_for_missing_topic_once() -> None:
+    registry = ToolRegistry()
+    registry.register(WikipediaLookupTool(lambda title: {
+        "query": {"pages": [{"title": title, "extract": "Model sunucusu."}]}
+    }))
+    llm = ScriptedLLM([
+        '{"action":"use_tool","tool":"wikipedia_lookup","arguments":{}}',
+        '{"action":"use_tool","tool":"wikipedia_lookup",'
+        '"arguments":{"title":"Triton Server"}}',
+        '{"action":"final_answer","answer":"Triton Server bir model sunucusudur."}',
+    ])
+    result = await SingleAgent(
+        llm, registry, {"wikipedia_lookup"}, role_name="researcher"
+    ).run("Bu konuyu araştır.")
+    assert [call.arguments for call in result.tool_calls] == [
+        {"title": "Triton Server"}
+    ]
+    assert "title alanını doldur" in llm.requests[1][-1].content
+
+
+@pytest.mark.asyncio
+async def test_public_lookup_never_sends_repeated_empty_arguments() -> None:
+    registry = ToolRegistry()
+    registry.register(WikipediaLookupTool(lambda _title: {}))
+    llm = ScriptedLLM([
+        '{"action":"use_tool","tool":"wikipedia_lookup","arguments":{}}',
+        '{"action":"use_tool","tool":"wikipedia_lookup","arguments":{}}',
+    ])
+    result = await SingleAgent(
+        llm, registry, {"wikipedia_lookup"}, role_name="researcher"
+    ).run("Bu konuyu araştır.")
+    assert result.tool_calls == []
+    assert "konu adını çıkaramadım" in result.answer
+
+
+@pytest.mark.asyncio
 async def test_unavailable_public_source_returns_uncertainty_without_retry() -> None:
     def fail(_title: str) -> dict[str, object]:
         raise OSError("offline")

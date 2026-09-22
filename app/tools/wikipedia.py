@@ -34,7 +34,10 @@ def _normalized_title(raw: str) -> str:
 class WikipediaInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    title: str = Field(min_length=2, max_length=120)
+    title: str = Field(
+        min_length=2, max_length=120,
+        description="Only the public article title, for example 'Triton Server'.",
+    )
 
 
 def _fetch_article(title: str) -> dict[str, object]:
