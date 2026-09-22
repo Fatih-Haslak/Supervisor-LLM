@@ -1,0 +1,8 @@
+{
+  "function": "add",
+  "cases": [
+    {"args": [2, 3], "expected": 5},
+    {"args": [-4, 7], "expected": 3},
+    {"args": [0, 0], "expected": 0}
+  ]
+}

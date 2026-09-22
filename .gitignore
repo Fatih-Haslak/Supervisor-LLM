@@ -11,5 +11,12 @@ dist/
 build/
 workspace/*
 !workspace/.gitkeep
+!workspace/test_scenarios/
+workspace/test_scenarios/*
+!workspace/test_scenarios/note.txt
+!workspace/test_scenarios/brief.txt
+!workspace/test_scenarios/sales.csv
+!workspace/test_scenarios/buggy_math.py
+!workspace/test_scenarios/buggy_math_tests.json
 *.gguf
 models/**/.cache/
