@@ -211,12 +211,14 @@ class ReviewerAgent:
 
         # A planned coder task can inspect code before a later task edits it.
         # Passing tests belong to the invocation that actually wrote Python.
-        code_written = any(
-            call.tool == "file_write" and call.result.success
-            and isinstance(call.arguments.get("path"), str)
-            and call.arguments["path"].casefold().endswith(".py")
-            for call in worker_result.tool_results
-        )
+        code_written = False
+        for call in worker_result.tool_results:
+            written_path = call.arguments.get("path")
+            if (call.tool == "file_write" and call.result.success
+                    and isinstance(written_path, str)
+                    and written_path.casefold().endswith(".py")):
+                code_written = True
+                break
         original_test_call = next(
             (call for call in reversed(worker_result.tool_results)
              if call.tool == "function_test" and call.result.success), None

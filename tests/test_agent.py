@@ -220,7 +220,12 @@ async def test_public_lookup_repairs_natural_question_and_query_argument() -> No
     question = "Bilmiyorumda benim için Fatih Terim kimdir araştırır mısın"
     assert _public_title_from_request(question) == "Fatih Terim"
     assert _public_title_from_request("fatih tekke kimdir") == "fatih tekke"
-    assert _public_title_from_request("fatih tekke (futbolcu) olan kimdir") == "fatih tekke"
+    assert _public_title_from_request("fatih tekke (futbolcu) olan kimdir") == (
+        "fatih tekke (futbolcu)"
+    )
+    assert _public_title_from_request("Mo Salah (footballer, born 2004) kimdir?") == (
+        "Mo Salah (footballer, born 2004)"
+    )
     seen: list[str] = []
 
     def fetch(title: str) -> dict[str, object]:
@@ -269,7 +274,7 @@ async def test_public_lookup_extracts_topic_from_research_assignment() -> None:
     ).run(request)
     assert result.tool_calls[0].arguments == {"title": "Triton Server"}
     assert result.tool_calls[0].result.error_type == "NoArticle"
-    assert "Türkçe Wikipedia'da makale bulamadım" in result.answer
+    assert "doğrulanmış bir Wikipedia maddesi bulamadım" in result.answer
     assert len(result.tool_calls) == 1
 
 

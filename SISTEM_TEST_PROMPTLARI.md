@@ -8,7 +8,7 @@ Bu rehberdeki metinleri `http://127.0.0.1:8000/` arayüzünün **Mesajın** alan
 - Dosya yollarını promptlarda yazıldığı gibi kullan. Uygulamanın dosya araçları yalnızca `workspace/` içinde çalışır.
 - **10, 11, 12 ve 13** dosya yazar; arayüz onay istediğinde işlemi inceleyip onayla. Bu senaryoları tekrar koşmadan önce oluşturulan `created_note.txt` ve `sales_report.md` dosyalarını kaldır veya promptta yeni dosya adı seç. **13** için `buggy_math.py` içeriğini başlangıçtaki `return a - b` satırına geri getir.
 - **02 ve 16** gibi takip sorularını önceki mesajla **aynı sohbette** gönder. Başka senaryoları araya sokma.
-- Wikipedia testi için `AGENT_WEB_LOOKUP_ENABLED=true` ve internet erişimi gerekir. Araç yalnızca Türkçe Wikipedia giriş metnini getirir; genel web araması yapmaz.
+- Wikipedia testi için `AGENT_WEB_LOOKUP_ENABLED=true` ve internet erişimi gerekir. Araç önce Türkçe Wikipedia'da doğrudan başlığı ve başlık aramasını dener; uygun madde yoksa İngilizce Wikipedia'ya geçer. Genel web araması yapmaz.
 - Beklenen agent ve araçlar hedef davranıştır. Gerçek modelin farklı rota seçmesi veya yanlış sonuç vermesi test bulgusudur; **başarılı** etiketiyle karıştırma.
 
 ## A. Sohbet, yönlendirme ve bellek
@@ -55,7 +55,23 @@ Bu rehberdeki metinleri `http://127.0.0.1:8000/` arayüzünün **Mesajın** alan
 
 > Triton Server'ın işlevini açıklar mısın? Türkçe Wikipedia'da araştır ve bulduğun kaynağı göster.
 
-**Beklenen:** `researcher`, `wikipedia_lookup` aracına boş argüman yerine `{"title":"Triton Server"}` gönderir. Türkçe Wikipedia'da bu başlıkta madde yoksa sonuç `NoArticle` olur; yanıt kaynak yokluğunu açıkça söyler ve bilgi uydurmaz. `InvalidArguments` tekrarı hata kabul edilir. Bu test, genel web araştırmasını doğrulamaz.
+**Beklenen:** `researcher`, `wikipedia_lookup` aracına boş argüman yerine `{"title":"Triton Server"}` gönderir. Türkçe ve İngilizce Wikipedia'da uygun madde bulunmazsa sonuç `NoArticle` olur; yanıt kaynak yokluğunu açıkça söyler ve bilgi uydurmaz. `InvalidArguments` tekrarı hata kabul edilir. Bu test, genel web araştırmasını doğrulamaz.
+
+### 04C — Kişi adı ve ayırıcı başlık
+
+**Prompt:**
+
+> Muhammed Salah (futbolcu) kimdir? Wikipedia kaynağını göster.
+
+**Beklenen:** Doğrudan ayırıcılı başlık bulunmasa bile `wikipedia_lookup` Türkçe `Muhammed Salah` maddesini bulur. Yanıtta `https://tr.wikipedia.org/wiki/Muhammed_Salah` bağlantısı bulunur; “makale yok” denmez.
+
+### 04D — Yalnızca İngilizce madde
+
+**Prompt:**
+
+> Mo Salah (footballer, born 2004) kimdir? Kaynağını göster.
+
+**Beklenen:** `wikipedia_lookup` başka futbolcuyu seçmez; Türkçe madde yoksa İngilizce Wikipedia'daki 2004 doğumlu kişinin maddesini kullanır. Son yanıtta Türkçe kaynak açıklaması, özgün İngilizce giriş metni ve bağlantı bulunur. Modelin değiştirdiği uyruk veya meslek bilgisi aktarılmaz.
 
 ## B. Yerel dosya ve veri araçları
 

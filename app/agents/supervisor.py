@@ -287,7 +287,8 @@ class Supervisor:
                                 {"tool": call.tool, "output": (call.result.output or "")[:800]}
                                 for call in worker_result.tool_results
                                 if call.result.success and call.tool in {
-                                    "calculator", "csv_summary", "function_test"
+                                    "calculator", "csv_summary", "function_test",
+                                    "wikipedia_lookup",
                                 }
                             ],
                         },

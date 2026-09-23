@@ -61,7 +61,7 @@ def _public_title_from_request(request: str) -> str | None:
             source, flags=re.IGNORECASE,
         ))
         if matches:
-            title = re.sub(r"\([^)]{0,50}\)", " ", matches[-1].group(1))
+            title = matches[-1].group(1)
             title = re.sub(r"\s+(?:olan|hakkında)\s*$", "", title, flags=re.IGNORECASE)
             leaders = re.compile(
                 r"^(?:bilmiyorum(?:da)?|peki|acaba|lütfen|bana|şu|benim\s+için)\s+",
@@ -69,8 +69,12 @@ def _public_title_from_request(request: str) -> str | None:
             )
             while leaders.search(title.strip()):
                 title = leaders.sub("", title.strip(), count=1)
-            words = re.findall(r"[A-Za-zÇĞİÖŞÜçğıöşü][A-Za-zÇĞİÖŞÜçğıöşü'-]*", title)
+            qualifier = re.search(r"\s*(\([^)]{2,50}\))\s*$", title)
+            base = title[:qualifier.start()] if qualifier else title
+            words = re.findall(r"[A-Za-zÇĞİÖŞÜçğıöşü][A-Za-zÇĞİÖŞÜçğıöşü'-]*", base)
             title = " ".join(words[-4:])
+            if qualifier:
+                title += " " + qualifier.group(1)
             if 2 <= len(title) <= 120:
                 return title
     return None
@@ -82,9 +86,10 @@ def _clean_public_title(value: object) -> str | None:
     title = value.strip(" \"'?.!")
     if not 2 <= len(title) <= 120:
         return None
+    unqualified = re.sub(r"\([^)]{0,50}\)", "", title)
     if re.search(r"[/\\\n\r:,;]|['’](?:ın|in|un|ün|nın|nin|nun|nün|ı|i|u|ü)\b|"
                  r"\b(?:kimdir|kimdi|nedir|hakkında|açıkla|araştır|"
-                 r"toplayın|wikipedia|için)\b", title, flags=re.IGNORECASE):
+                 r"toplayın|wikipedia|için)\b", unqualified, flags=re.IGNORECASE):
         return None
     if len(title.split()) > 8:
         return None
@@ -315,8 +320,8 @@ class SingleAgent:
             if (self._role_name == "researcher" and decision.tool == "wikipedia_lookup"
                     and result.error_type == "NoArticle"):
                 state.finish(
-                    "Bu konu için Türkçe Wikipedia'da makale bulamadım; "
-                    "bu kaynaktan bilgi doğrulayamıyorum."
+                    "Bu başlıkla eşleşen doğrulanmış bir Wikipedia maddesi bulamadım. "
+                    "Kişi veya konu adını farklı bir yazımla deneyebilirsiniz."
                 )
                 return AgentRunResult(state=state)
             if (self._role_name == "researcher" and decision.tool == "wikipedia_lookup"

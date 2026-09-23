@@ -24,11 +24,14 @@ WORKER_POLICIES: dict[ModelRole, WorkerPolicy] = {
         allowed_tools=frozenset({"calculator", "file_read", "file_write", "directory_list"}),
     ),
     "researcher": WorkerPolicy(
-        description="Search local documents or look up public facts on Turkish Wikipedia.",
+        description="Search local documents or look up public facts on Wikipedia.",
         instructions=(
             "For a public person or encyclopedic question, call wikipedia_lookup with "
             "only the public topic title. Answer in 2-4 short Turkish sentences; "
-            "cite its returned URL and keep facts within its extract. "
+            "cite its returned URL and keep facts within its extract. The lookup "
+            "may return Turkish or English; translate English facts into Turkish "
+            "and identify the source language. A successful lookup means the article "
+            "exists; never say it was unavailable. "
             "For workspace questions, search local documents and then read a "
             "matching file with file_read. Preserve exact codes and names. If no source "
             "is available, say that you cannot verify the answer; never claim a person "

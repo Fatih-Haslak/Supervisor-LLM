@@ -6,6 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.llm.schemas import ChatMessage
 from app.observability.events import current_task_id
+from app.orchestration.evidence import ground_wikipedia_answer
 from app.tools.base import ToolResult
 
 
@@ -92,7 +93,9 @@ class AgentState(BaseModel):
         )
 
     def finish(self, answer: str) -> None:
-        self.final_answer = answer
+        wiki_results = [call.result for call in self.tool_results
+                        if call.tool == "wikipedia_lookup"]
+        self.final_answer = ground_wikipedia_answer(answer, wiki_results)
         self.completed_tasks.extend(self.pending_tasks)
         self.pending_tasks.clear()
         self.current_agent = None
