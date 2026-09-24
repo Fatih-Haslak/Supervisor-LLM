@@ -17,7 +17,7 @@
     <main>
       <section class="intro" aria-labelledby="page-title">
         <h1 id="page-title">Sohbet et. Gerektiğinde agent'lar çalışsın.</h1>
-        <p>Bu sohbetin geçmişi yerel olarak saklanır. Dosya ve çok adımlı görevlerde supervisor uzman agent'lara geçer. Kamuya açık bilgi sorularında başlık Wikipedia'ya gönderilebilir.</p>
+        <p>Bu sohbetin geçmişi yerel olarak saklanır. Dosya ve çok adımlı görevlerde supervisor uzman agent'lara geçer. Kamuya açık araştırmada web kaynakları aranır ve yanıt kaynaklarla denetlenebilir.</p>
         <p class="architecture">Sen → Supervisor → Uzman agent + araçlar → Reviewer → Tek yanıt</p>
       </section>
 
@@ -32,12 +32,12 @@
               <summary>Gelişmiş çalışma biçimleri</summary>
               <label for="task-mode">Yürütme biçimi</label>
               <select id="task-mode" name="mode" aria-describedby="mode-description">
-                <option value="auto">Otomatik · Sohbet ve görev</option>
-                <option value="plan">Genel · Planlı supervisor</option>
-                <option value="supervisor">Supervisor · Anlık delege etme</option>
-                <option value="router">Router · Basit işlerde hızlı yönlendirme</option>
-                <option value="single">Tek agent · Tek döngü</option>
-                <option value="graph">LangGraph · Alternatif akış motoru</option>
+                <option value="auto">Önerilen · Otomatik seçim</option>
+                <option value="plan">Adımlı görev · Planla ve uygula</option>
+                <option value="supervisor">Uzman ekip · Supervisor yönetsin</option>
+                <option value="router">Hızlı uzman seçimi</option>
+                <option value="single">Tek agent · Araç kullansın</option>
+                <option value="graph">LangGraph · Geliştirici seçeneği</option>
               </select>
               <p id="mode-description">Sohbette geçmişi kullanır; hesaplarda araç, dosya ve çok adımlı işlerde supervisor seçer.</p>
             </details>
@@ -54,6 +54,21 @@
             </div>
             <div id="chat-history" class="chat-history" aria-live="polite"><p class="empty">İlk mesajını yaz.</p></div>
           </section>
+          <details class="memory-panel" id="memory-panel">
+            <summary>Kalıcı bellek</summary>
+            <p>Buraya eklediğin bilgiler sonraki sohbetlerde kullanılır. Kayıtlar yerel SQLite dosyasında saklanır; parola veya anahtar ekleme.</p>
+            <form id="memory-form" class="memory-form">
+              <label for="memory-key">Anahtar (ör. response_language)</label>
+              <input id="memory-key" name="key" maxlength="64" pattern="[a-z][a-z0-9_.-]{1,63}" required>
+              <label for="memory-value">Hatırlanacak bilgi</label>
+              <input id="memory-value" name="value" maxlength="500" required>
+              <label for="memory-category">Tür</label>
+              <select id="memory-category" name="category"><option value="preference">Tercih</option><option value="decision">Proje kararı</option><option value="fact">Bilgi</option></select>
+              <button type="submit">Belleğe kaydet</button>
+            </form>
+            <p id="memory-error" class="error" role="alert" hidden></p>
+            <div id="memory-list" class="memory-list"><p class="empty">Bellek yükleniyor.</p></div>
+          </details>
           <div class="monitor-heading">
             <div><h2 id="monitor-heading">Canlı görev haritası</h2><p id="task-id">Henüz görev yok</p></div>
             <span id="status" class="status" aria-live="polite">Hazır</span>
@@ -78,11 +93,17 @@
                 <span><i class="legend-dot active"></i>Çalışıyor</span>
                 <span><i class="legend-dot done"></i>Tamamlandı</span>
                 <span><i class="legend-dot skipped"></i>Gerekmedi</span>
+                <span><i class="legend-dot failed"></i>Hata</span>
+                <span><i class="legend-dot approval"></i>Onay bekliyor</span>
               </div>
             </div>
-            <div id="flow-graph" class="flow-graph" aria-label="Agent görev akışı">
-              <p class="flow-empty">İlk görev henüz başlamadı.</p>
-            </div>
+              <div id="flow-graph" class="flow-tree" aria-label="Agent görev akışı">
+                <p class="flow-empty">İlk görev henüz başlamadı.</p>
+              </div>
+              <aside id="flow-inspector" class="flow-inspector" aria-live="polite">
+                <strong>Akış nasıl okunur?</strong>
+                <p>İstekten yöneticiye, oradan seçilen agent ve araç dallarına ilerler. Bir adıma tıklayarak ne yaptığını görebilirsin.</p>
+              </aside>
           </section>
 
           <details class="event-log">

@@ -102,6 +102,18 @@ def test_evaluation_rejects_english_answer_to_turkish_case() -> None:
     assert not score.language_match
 
 
+def test_evaluation_can_require_successful_research_review() -> None:
+    case = EvaluationCase(
+        id="research-review", task="Triton hakkında araştır", mode="auto",
+        expected_answer_contains="kaynak", expected_review_status="pass",
+    )
+    state = AgentState(user_request=case.task)
+    state.reviews.append(ReviewRecord(agent="researcher", task=case.task, attempt=1, status="pass"))
+    state.finish("Kaynaklı cevap")
+    score = evaluate([EvaluationObservation(case=case, state=state, latency_ms=1)]).cases[0]
+    assert score.success and score.review_match
+
+
 def test_duplicate_case_ids_are_rejected(tmp_path: Path) -> None:
     path = tmp_path / "cases.json"
     path.write_text(

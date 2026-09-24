@@ -12,6 +12,7 @@ from app.tools.filesystem import FileReadTool, FileWriteTool, Workspace
 from app.tools.function_test import FunctionTestTool
 from app.tools.registry import ToolRegistry
 from app.tools.search import SearchTool
+from app.tools.web_search import WebSearchTool
 from app.tools.wikipedia import WikipediaLookupTool
 
 
@@ -188,7 +189,52 @@ async def test_researcher_looks_up_public_fact_before_answer() -> None:
     ).run("Fatih Tekke kimdir?")
     assert "futbolcudur" in result.answer
     assert [call.tool for call in result.tool_calls] == ["wikipedia_lookup"]
-    assert "Public fact lookup" in llm.requests[1][-1].content
+    assert "wikipedia_lookup" in llm.requests[1][-1].content
+
+
+@pytest.mark.asyncio
+async def test_repeated_successful_web_search_uses_existing_evidence() -> None:
+    registry = ToolRegistry()
+    registry.register(WebSearchTool(search=lambda query: {
+        "provider": "test", "query": query, "results": [{
+            "title": "Mohamed Salah - Liverpool FC",
+            "url": "https://www.liverpoolfc.com/team/mens/mohamed-salah",
+            "snippet": "Mohamed Salah is a forward for Liverpool FC.",
+        }],
+    }))
+    search_decision = (
+        '{"action":"use_tool","tool":"web_search",'
+        '"arguments":{"query":"Mohamed Salah Liverpool FC"}}'
+    )
+    llm = ScriptedLLM([search_decision, search_decision, search_decision])
+    result = await SingleAgent(
+        llm, registry, {"web_search"}, role_name="researcher"
+    ).run("Muhammed Salah kimdir? Webde araştır.")
+    assert result.state.final_answer is not None
+    assert "Mohamed Salah" in result.answer
+    assert "https://www.liverpoolfc.com/team/mens/mohamed-salah" in result.answer
+    assert [call.tool for call in result.tool_calls] == ["web_search"]
+
+
+@pytest.mark.asyncio
+async def test_researcher_falls_back_to_sources_after_invalid_model_output() -> None:
+    registry = ToolRegistry()
+    registry.register(WebSearchTool(search=lambda query: {
+        "provider": "test", "query": query, "results": [{
+            "title": "Mohamed Salah profile", "url": "https://example.org/salah",
+            "snippet": "Liverpool forward Mohamed Salah.",
+        }],
+    }))
+    llm = ScriptedLLM([
+        '{"action":"use_tool","tool":"web_search","arguments":{"query":"Mohamed Salah"}}',
+        "not json", "still not json", "also not json",
+    ])
+    result = await SingleAgent(llm, registry, {"web_search"}, role_name="researcher").run(
+        "Muhammed Salah kimdir? Webde araştır."
+    )
+    assert "Mohamed Salah profile" in result.answer
+    assert "https://example.org/salah" in result.answer
+    assert len(result.tool_calls) == 1
 
 
 @pytest.mark.asyncio

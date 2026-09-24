@@ -1,5 +1,22 @@
 # Local LLM Agentic System — Yapılacaklar
 
+## Güncel uygulama durumu (24 Eylül 2026)
+
+Bu bölüm, aşağıdaki tarihsel faz listesinin bugünkü çalışan karşılığını özetler.
+Sistem tek yerel GGUF modelini paylaşır; otomatik sohbet/araç yönlendirmesi,
+supervisor, planlı akış, uzman worker'lar, reviewer, SQLite sohbet geçmişi ve
+elle yönetilen uzun dönem belleği vardır. Araştırmacı hem yerel belgeleri hem de
+kamuya açık web arama sonuçlarını kullanabilir; başarılı web araması kaynak
+bağlantılarını yanıta taşır ve reviewer'a kanıt olarak sunulur. UI'dan bellek
+kayıtları eklenip silinebilir.
+
+Sonraki öncelikler: canlı kaynak sayfalarını güvenilir biçimde açıp daha derin
+doğrulama; web sağlayıcısı ve istek sınırları için yapılandırma/sağlık durumu;
+eval setinde kasıtlı hatalı araç argümanları, boş arama sonucu, sağlayıcı zaman
+aşımı, reviewer reddi ve bellek takibi senaryolarını gerçek yerel modelle
+ölçmek. Aşağıdaki eski faz kutuları ilk geliştirme planından kalmıştır; tamamlanma
+durumunu tek başlarına göstermez.
+
 ## 1. Projenin amacı
 
 Bu projenin amacı, tamamen Python ile geliştirilen ve mümkün olduğunca **lokal çalışan bir LLM tabanlı agentic sistem** oluşturmaktır.

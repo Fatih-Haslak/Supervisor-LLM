@@ -1,3 +1,4 @@
+import json
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -18,6 +19,7 @@ class ScriptedLLM:
     def __init__(self, responses: list[str]) -> None:
         self._responses = iter(responses)
         self.calls = 0
+        self.requests: list[list[ChatMessage]] = []
 
     async def chat(
         self,
@@ -28,6 +30,7 @@ class ScriptedLLM:
     ) -> LLMResponse:
         assert json_schema is not None
         self.calls += 1
+        self.requests.append(list(messages))
         return LLMResponse(content=next(self._responses), model="scripted")
 
 
@@ -108,8 +111,98 @@ async def test_reviewer_requires_file_evidence(tmp_path: Path) -> None:
         "Kod yaz", "module.py oluştur", WorkerResult(answer="Yazıldı")
     )
     assert result.verdict.status == "fail"
-    assert "No workspace file evidence" in result.verdict.issues[0]
+    assert "dosya" in result.verdict.issues[0]
     assert llm.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_reviewer_accepts_successful_wikipedia_source(tmp_path: Path) -> None:
+    root = tmp_path / "workspace"
+    root.mkdir()
+    llm = ScriptedLLM(['{"status":"pass","issues":[]}'])
+    source = ToolCallRecord(
+        tool="wikipedia_lookup", arguments={"title": "Şenol Güneş"},
+        result=ToolResult.ok(
+            '{"title":"Şenol Güneş","extract":"Türk futbol teknik direktörü.",'
+            '"language":"tr","url":"https://tr.wikipedia.org/wiki/%C5%9Eenol_G%C3%BCne%C5%9F"}'
+        ),
+    )
+    result = await ReviewerAgent(llm, make_registry(root)).review(
+        "Şenol Güneş hakkında bilgi getir, reviewer'a sok",
+        "Wikipedia'da araştır ve kaynak URL'siyle özetle",
+        WorkerResult(answer="Türk teknik direktörüdür. Kaynak: Wikipedia", tool_results=[source]),
+    )
+    assert result.verdict.status == "pass"
+    assert llm.calls == 1
+    evidence = json.loads(llm.requests[0][-1].content)
+    assert evidence["public_sources"][0]["title"] == "Şenol Güneş"
+    assert evidence["public_sources"][0]["url"].startswith("https://tr.wikipedia.org/")
+
+
+@pytest.mark.asyncio
+async def test_reviewer_accepts_web_search_snippet_as_public_evidence(tmp_path: Path) -> None:
+    root = tmp_path / "workspace"
+    root.mkdir()
+    llm = ScriptedLLM(['{"status":"pass","issues":[]}'])
+    source = ToolCallRecord(
+        tool="web_search", arguments={"query": "Triton Server"},
+        result=ToolResult.ok(json.dumps({"provider": "Bing RSS", "results": [{
+            "title": "Triton Inference Server", "url": "https://developer.nvidia.com/triton",
+            "snippet": "A platform for deploying machine learning models."
+        }]})),
+    )
+    result = await ReviewerAgent(llm, make_registry(root)).review(
+        "Triton Server'ın işlevini araştır", "Triton Server hakkında kaynaklı bilgi ver",
+        WorkerResult(answer="Model dağıtım platformudur. Kaynak: https://developer.nvidia.com/triton",
+                     tool_results=[source]),
+    )
+    assert result.verdict.status == "pass"
+    evidence = json.loads(llm.requests[0][-1].content)
+    assert evidence["public_sources"][0]["extract"].startswith("A platform")
+    assert evidence["public_sources"][0]["url"] == "https://developer.nvidia.com/triton"
+
+
+@pytest.mark.asyncio
+async def test_explicit_research_review_reviews_researcher_and_skips_report_writer(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "workspace"
+    root.mkdir()
+    registry = make_registry(root)
+    source = ToolCallRecord(
+        tool="wikipedia_lookup", arguments={"title": "Şenol Güneş"},
+        result=ToolResult.ok(
+            '{"title":"Şenol Güneş","extract":"Türk futbol teknik direktörü.",'
+            '"language":"tr","url":"https://tr.wikipedia.org/wiki/%C5%9Eenol_G%C3%BCne%C5%9F"}'
+        ),
+    )
+
+    class ResearchWorker:
+        async def run(self, task: str, state: AgentState) -> WorkerResult:
+            assert state.current_agent == "researcher"
+            return WorkerResult(
+                answer="Türk futbol teknik direktörüdür. Kaynak: https://tr.wikipedia.org/wiki/",
+                tool_results=[source],
+            )
+
+    llm = ScriptedLLM([
+        '{"tasks":[{"id":1,"agent":"writer","task":"Rapor yaz",'
+        '"depends_on":[]}]}',
+        '{"status":"pass","issues":[]}',
+        '{"action":"final_answer","answer":"Şenol Güneş Türk futbol teknik direktörüdür."}',
+    ])
+    state = await Supervisor(
+        llm, {"researcher": ResearchWorker(), "writer": NeverCalledWorker()},
+        reviewer=ReviewerAgent(llm, registry),
+    ).run_planned("Şenol Güneş hakkında bilgi getir ve bunu reviewer'a sok")
+
+    assert state.plan is not None
+    assert [task.agent for task in state.plan.tasks] == ["researcher"]
+    assert [review.status for review in state.reviews] == ["pass"]
+    assert state.completed_tasks == [state.plan.tasks[0].task]
+    assert state.final_answer is not None
+    assert state.final_answer.startswith("Şenol Güneş Türk futbol teknik direktörüdür.")
+    assert "wikipedia.org/wiki/" in state.final_answer
 
 
 @pytest.mark.asyncio

@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from pydantic import Field, field_validator
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     llm_timeout_seconds: float = Field(default=120, gt=0, le=600)
     llm_temperature: float = Field(default=0.2, ge=0, le=2)
     web_lookup_enabled: bool = True
+    web_search_api_key: SecretStr | None = None
     log_level: str = "INFO"
 
     @field_validator("model_path")

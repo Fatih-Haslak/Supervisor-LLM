@@ -18,5 +18,8 @@
   {"id":"single-calculator","task":"3+44 işlemini calculator ile hesapla.","mode":"single","expected_tools":["calculator"],"expected_answer_contains":"47"},
   {"id":"planned-supervisor-calculator","task":"3+44 işlemini hesapla.","mode":"plan","expected_tools":["calculator"],"expected_agent":"general","expected_answer_contains":"47"},
   {"id":"router-calculator","task":"3+44 işlemini hesapla.","mode":"router","expected_tools":["calculator"],"expected_agent":"general","expected_answer_contains":"47"},
-  {"id":"graph-calculator","task":"3+44 işlemini hesapla.","mode":"graph","expected_tools":["calculator"],"expected_agent":"general","expected_answer_contains":"47"}
+  {"id":"graph-calculator","task":"3+44 işlemini hesapla.","mode":"graph","expected_tools":["calculator"],"expected_agent":"general","expected_answer_contains":"47"},
+  {"id":"auto-public-research-web","task":"Triton Server'ın işlevini kaynaklarıyla araştır ve açıkla.","mode":"auto","expected_tools":["web_search"],"expected_agent":"researcher","expected_answer_contains":"Kaynak","expected_review_status":"pass"},
+  {"id":"auto-public-research-natural","task":"Bana Muhammed Salah hakkında bilgi getir.","mode":"auto","expected_tools":["web_search"],"expected_agent":"researcher","expected_answer_contains":"Kaynak","expected_review_status":"pass"},
+  {"id":"auto-research-review","task":"Şenol Güneş hakkında bilgi bul ve sonucu reviewer ile doğrula.","mode":"auto","expected_tools":["web_search"],"expected_agent":"researcher","expected_answer_contains":"Kaynak","expected_review_status":"pass"}
 ]

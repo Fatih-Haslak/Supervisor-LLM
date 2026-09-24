@@ -51,3 +51,40 @@ def ground_wikipedia_answer(answer: str, results: Sequence[ToolResult]) -> str:
             return answer.rstrip() + f"\nKaynak: {url}"
         return answer
     return answer
+
+
+def ground_web_answer(answer: str, results: Sequence[ToolResult]) -> str:
+    """Expose verified search URLs and remove links the model invented."""
+    urls: list[str] = []
+    for result in results:
+        if not result.success or not result.output:
+            continue
+        try:
+            data = json.loads(result.output)
+        except (TypeError, ValueError):
+            continue
+        rows = data.get("results") if isinstance(data, dict) else None
+        if not isinstance(rows, list):
+            continue
+        for row in rows[:5]:
+            if (isinstance(row, dict) and isinstance(row.get("url"), str)
+                    and re.fullmatch(r"https://[^\s]+", row["url"])):
+                urls.append(row["url"][:500])
+    if not urls:
+        return answer
+    trusted = set(urls)
+    link_pattern = re.compile(r"\[([^\]]+)\]\((https?://[^)]+)\)")
+    answer = link_pattern.sub(
+        lambda match: match.group(0) if match.group(2) in trusted else match.group(1),
+        answer,
+    )
+    url_pattern = re.compile(r"https?://[^\s)>\]]+")
+    answer = url_pattern.sub(
+        lambda match: match.group(0) if match.group(0).rstrip(".,;:!?\"'") in trusted else "",
+        answer,
+    )
+    cited = list(dict.fromkeys(url for url in urls if url in answer))
+    if cited:
+        return answer
+    # Keep the answer's claims untouched; show evidence links for user verification.
+    return answer.rstrip() + "\nKaynaklar: " + " · ".join(dict.fromkeys(urls[:3]))

@@ -15,6 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from app.config.settings import Settings
+from app.memory.store import MemoryInput, SQLiteMemoryStore
 from app.service.conversations import SQLiteConversationStore
 from app.service.runtime import AgentRuntime
 from app.service.tasks import TaskManager, TaskMode, TaskRunner, TaskView
@@ -36,11 +37,16 @@ class ApprovalInput(BaseModel):
     approved: bool
 
 
-def create_app(runner: TaskRunner | None = None) -> FastAPI:
+def create_app(
+    runner: TaskRunner | None = None, *, memory_store: SQLiteMemoryStore | None = None
+) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         if runner is None:
-            async with AgentRuntime(Settings(), Path("workspace")) as runtime:
+            settings = Settings()
+            store = memory_store or SQLiteMemoryStore(settings.memory_db_path)
+            app.state.memories = store
+            async with AgentRuntime(settings, Path("workspace")) as runtime:
                 manager = TaskManager(
                     runtime.run,
                     conversation_store=SQLiteConversationStore(
@@ -54,6 +60,7 @@ def create_app(runner: TaskRunner | None = None) -> FastAPI:
                 finally:
                     await manager.close()
         else:
+            app.state.memories = memory_store
             manager = TaskManager(runner)
             app.state.tasks = manager
             await manager.start()
@@ -95,6 +102,12 @@ def create_app(runner: TaskRunner | None = None) -> FastAPI:
     def manager(request: Request) -> TaskManager:
         return cast(TaskManager, request.app.state.tasks)
 
+    def memories(request: Request) -> SQLiteMemoryStore:
+        store = getattr(request.app.state, "memories", None)
+        if store is None:
+            raise HTTPException(status_code=503, detail="Memory store is unavailable")
+        return cast(SQLiteMemoryStore, store)
+
     @app.get("/", include_in_schema=False)
     async def index() -> FileResponse:
         return FileResponse(_UI / "index.html", media_type="text/html")
@@ -130,6 +143,24 @@ def create_app(runner: TaskRunner | None = None) -> FastAPI:
         return {"conversation_id": str(conversation_id), "messages": [
             message.model_dump() for message in messages
         ]}
+
+    @app.get("/memories")
+    async def list_memories(request: Request) -> dict[str, object]:
+        return {"memories": [item.model_dump() for item in await memories(request).list()]}
+
+    @app.post("/memories")
+    async def save_memory(payload: MemoryInput, request: Request) -> dict[str, object]:
+        try:
+            entry = await memories(request).save(payload)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail="Memory value was rejected") from exc
+        return {"memory": entry.model_dump()}
+
+    @app.delete("/memories/{key}", status_code=204)
+    async def delete_memory(key: str, request: Request) -> None:
+        removed = await memories(request).delete(key)
+        if not removed:
+            raise HTTPException(status_code=404, detail="Memory not found")
 
     @app.delete("/conversations/{conversation_id}", status_code=204)
     async def delete_conversation(conversation_id: UUID, request: Request) -> None:

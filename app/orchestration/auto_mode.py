@@ -47,10 +47,13 @@ _REPORT_AFTER_ANALYSIS = re.compile(
 _TOOL_TASK = re.compile(
     r"workspace[/\\]|\.(?:csv|py|md|txt|json)\b|```(?:python)?\s|"
     r"\b(?:dosyayı|dosyadan|dosyaya|dosyaları|klasörü|"
-    r"kaydet|oluştur|düzelt|test et|hesapla|araştır|kimdir|kimdi)\b",
+    r"kaydet|oluştur|düzelt|test et|hesapla|araştır|arastir|kimdir|kimdi|nedir|"
+    r"bilgi getir|hakkında bilgi|hakkinda bilgi|kaynaklarıyla|araştırır mısın)\b",
     flags=re.IGNORECASE,
 )
-_PUBLIC_FACT = re.compile(r"\b(?:kimdir|kimdi)\b", flags=re.IGNORECASE)
+_PUBLIC_FACT = re.compile(
+    r"\b(?:kimdir|kimdi|nedir|araştır|arastir|bilgi getir)\b", flags=re.IGNORECASE
+)
 
 
 class AutoModeRouter:
@@ -71,6 +74,8 @@ class AutoModeRouter:
             return self._record("chat")
         if _ARITHMETIC.fullmatch(message):
             return self._record("single")
+        if re.search(r"```(?:python)?\s", message, flags=re.IGNORECASE):
+            return self._record("supervisor")
         if _EXPLICIT_SEQUENCE.search(message) or _REPORT_AFTER_ANALYSIS.search(message):
             return self._record("plan")
 

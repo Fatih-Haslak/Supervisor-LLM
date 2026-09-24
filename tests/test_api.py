@@ -1,9 +1,11 @@
 import time
+from pathlib import Path
 
 from fastapi.testclient import TestClient
 
 from app.api import create_app
 from app.llm.schemas import ChatMessage
+from app.memory.store import SQLiteMemoryStore
 from app.orchestration.state import AgentState
 from app.security.approvals import ApprovalRequest, Approver
 from app.service.tasks import TaskMode
@@ -27,6 +29,8 @@ def test_api_task_lifecycle_stream_and_ui() -> None:
         assert page.status_code == 200
         assert "Canlı görev haritası" in page.text
         assert 'id="flow-graph"' in page.text
+        assert 'class="flow-tree"' in page.text
+        assert 'id="flow-inspector"' in page.text
         response = client.post("/tasks", json={"message": "Merhaba", "mode": "single"})
         assert response.status_code == 202
         task_id = response.json()["task_id"]
@@ -66,6 +70,24 @@ def test_api_rejects_invalid_input_and_cross_origin_post() -> None:
         assert client.post(
             "/tasks/missing/approval", json={"approved": True}
         ).status_code == 404
+
+
+def test_api_memory_can_save_list_reject_secret_and_delete(tmp_path: Path) -> None:
+    store = SQLiteMemoryStore(tmp_path / "memory.sqlite3")
+    with TestClient(
+        create_app(fake_runner, memory_store=store), base_url="http://127.0.0.1:8000",
+        client=("127.0.0.1", 51000),
+    ) as client:
+        saved = client.post("/memories", json={
+            "key": "response_language", "value": "Türkçe yanıt ver", "category": "preference"
+        })
+        assert saved.status_code == 200
+        assert client.get("/memories").json()["memories"][0]["value"] == "Türkçe yanıt ver"
+        assert client.post("/memories", json={
+            "key": "private_note", "value": "password: secret"
+        }).status_code == 422
+        assert client.delete("/memories/response_language").status_code == 204
+        assert client.get("/memories").json()["memories"] == []
 
 
 def test_api_exposes_exact_approval_and_accepts_one_decision() -> None:

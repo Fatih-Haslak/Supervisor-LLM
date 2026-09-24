@@ -24,20 +24,22 @@ WORKER_POLICIES: dict[ModelRole, WorkerPolicy] = {
         allowed_tools=frozenset({"calculator", "file_read", "file_write", "directory_list"}),
     ),
     "researcher": WorkerPolicy(
-        description="Search local documents or look up public facts on Wikipedia.",
+        description="Research public web sources or search local documents.",
         instructions=(
-            "For a public person or encyclopedic question, call wikipedia_lookup with "
-            "only the public topic title. Answer in 2-4 short Turkish sentences; "
-            "cite its returned URL and keep facts within its extract. The lookup "
-            "may return Turkish or English; translate English facts into Turkish "
-            "and identify the source language. A successful lookup means the article "
-            "exists; never say it was unavailable. "
+            "For biographies or 'who is' questions, call wikipedia_lookup first with only "
+            "the person's name as title. If no matching article is found, call web_search. "
+            "For current information or technical topics, call web_search with a concise "
+            "topic query. "
+            "Never invent or guess URLs. Use only successful source snippets and their exact "
+            "HTTPS URLs; say when snippets "
+            "do not establish a detail. Prefer Turkish sources; translate reliable English "
+            "results into Turkish. "
             "For workspace questions, search local documents and then read a "
             "matching file with file_read. Preserve exact codes and names. If no source "
             "is available, say that you cannot verify the answer; never claim a person "
             "does not exist. Do not send private workspace content to Wikipedia."
         ),
-        allowed_tools=frozenset({"search", "file_read", "wikipedia_lookup"}),
+        allowed_tools=frozenset({"search", "file_read", "wikipedia_lookup", "web_search"}),
     ),
     "coder": WorkerPolicy(
         description="Inspect, revise, and test small Python functions inside workspace.",
@@ -95,7 +97,8 @@ def build_workers(
         instructions = policy.instructions
         if name == "researcher" and not allow_web:
             allowed.discard("wikipedia_lookup")
-            instructions += " Wikipedia lookup is unavailable; do not invent public facts."
+            allowed.discard("web_search")
+            instructions += " Public web lookup is unavailable; do not invent public facts."
         if allow_python and name in {"general", "coder"}:
             allowed.add("python_exec")
         workers[name] = SingleAgentWorker(
@@ -103,6 +106,7 @@ def build_workers(
                 model_for_role(name) if model_for_role is not None else llm,
                 registry,
                 allowed,
+                max_json_retries=1 if name == "researcher" else 2,
                 role_name=name,
                 role_instructions=instructions,
             )

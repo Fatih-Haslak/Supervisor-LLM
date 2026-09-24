@@ -26,6 +26,7 @@ from app.tools.filesystem import DirectoryListTool, FileReadTool, FileWriteTool,
 from app.tools.function_test import FunctionTestTool
 from app.tools.registry import ToolRegistry
 from app.tools.search import SearchTool
+from app.tools.web_search import WebSearchTool
 from app.tools.wikipedia import WikipediaLookupTool
 
 
@@ -61,6 +62,10 @@ class AgentRuntime:
             registry.register(tool)
         if self._settings.web_lookup_enabled:
             registry.register(WikipediaLookupTool())
+            registry.register(WebSearchTool(
+                api_key=(self._settings.web_search_api_key.get_secret_value()
+                         if self._settings.web_search_api_key else None)
+            ))
         self._memories = await SQLiteMemoryStore(self._settings.memory_db_path).list()
         strategy = SharedModelStrategy(MemoryAwareLLM(
             TracedLLM(self._client), self._memories

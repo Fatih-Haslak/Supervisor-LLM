@@ -104,6 +104,27 @@ def _is_inline_python_request(request: str) -> bool:
     )
 
 
+def _explicit_review_requested(request: str, task: str = "") -> bool:
+    text = (request + " " + task).casefold().replace("ı", "i")
+    return bool(re.search(
+        r"\b(?:reviewer|review|incele\w*|kontrol\s+et\w*|denetle\w*|"
+        r"doğrula\w*|dogrula\w*)\b", text,
+    ))
+
+
+def _research_only_request(request: str) -> bool:
+    text = request.casefold().replace("ı", "i")
+    asks_research = bool(re.search(
+        r"\b(?:arastir\w*|bilgi\s+getir\w*|kimdir|hakkinda\s+bilgi|"
+        r"wikipedia|konusunda\s+bilgi|konusu\s+hakkinda|hakkinda\s+arastir)\b", text,
+    ))
+    asks_file = bool(re.search(
+        r"\b(?:dosyaya\s+yaz|dosya\s+oluştur|rapor\s+yaz|kaydet|write\s+to\s+file)\b",
+        text,
+    ))
+    return asks_research and not asks_file
+
+
 _INLINE_PYTHON_TASK = (
     "Kullanıcının mesajında verdiği satır içi Python kodunu doğrudan analiz et. "
     "Çalışma alanında dosya arama, dosya oluşturma veya araç kullanma. Kodun "
@@ -200,6 +221,18 @@ class Supervisor:
                             and "researcher" in self._workers
                             and not state.agent_outputs):
                         decision.next_agent = "researcher"
+                    elif (_research_only_request(state.user_request)
+                          and "researcher" in self._workers
+                          and not state.agent_outputs):
+                        decision.next_agent = "researcher"
+                        decision.task = (
+                            "Araştırmacı: Kişi biyografisi sorularında önce wikipedia_lookup "
+                            "ile Türkçe maddeyi ara; bulunamazsa web_search kullan. Güncel "
+                            "ve diğer konularda web_search kullan. Yalnızca araçtan dönen "
+                            "bilgileri ve kaynak URL'lerini kullan; "
+                            "kullanıcı istemediyse kaynak sayısı veya ek çıktı şartı uydurma. "
+                            + state.user_request
+                        )
                     elif (_is_inline_python_request(state.user_request)
                           and "coder" in self._workers
                           and not state.agent_outputs):
@@ -289,6 +322,7 @@ class Supervisor:
                                 if call.result.success and call.tool in {
                                     "calculator", "csv_summary", "function_test",
                                     "wikipedia_lookup",
+                                    "web_search",
                                 }
                             ],
                         },
@@ -333,12 +367,21 @@ class Supervisor:
         for attempt in range(1, self._max_review_retries + 2):
             assignment = task
             if feedback:
-                assignment += (
+                feedback_text = (
                     "\nReviewer feedback to fix: "
                     + json.dumps(feedback, ensure_ascii=False)
-                    + "\nAddress this feedback in the answer or repair existing files "
-                    "with overwrite=true when the task uses workspace files."
                 )
+                if agent == "researcher":
+                    feedback_text += (
+                        "\nRecheck the successful public source, correct unsupported claims, "
+                        "and include its URL. Do not create or edit workspace files."
+                    )
+                else:
+                    feedback_text += (
+                        "\nAddress this feedback in the answer or repair existing files "
+                        "with overwrite=true when the task uses workspace files."
+                    )
+                assignment += feedback_text
             result = await self._run_worker(
                 state, agent, assignment, complete=False, planned_id=planned_id
             )
@@ -439,14 +482,29 @@ class Supervisor:
         state = self._new_state(user_request, history)
         for round_number in range(1, self._max_rounds + 1):
             state.step_count = round_number
-            decision = await self._decide(state)
+            try:
+                decision = await self._decide(state)
+            except StructuredOutputError:
+                if not state.agent_outputs or state.pending_tasks:
+                    raise
+                answer = self._fallback_worker_answer(state)
+                record(
+                    "supervisor_fallback", agent="supervisor", success=True,
+                    error_type="StructuredOutputError",
+                )
+                state.finish(answer)
+                return state
             state.messages.append(ChatMessage(role="assistant", content=decision.model_dump_json()))
             if isinstance(decision, SupervisorFinalDecision):
                 state.finish(decision.answer)
                 return state
 
             state.pending_tasks.append(decision.task)
-            if decision.next_agent in {"coder", "writer"} and self._reviewer is not None:
+            if (self._reviewer is not None and (
+                    decision.next_agent in {"coder", "writer"}
+                    or (decision.next_agent == "researcher"
+                        and _research_only_request(state.user_request))
+            )):
                 if not await self._run_reviewed_worker(
                     state, decision.next_agent, decision.task
                 ):
@@ -454,6 +512,37 @@ class Supervisor:
             else:
                 await self._run_worker(state, decision.next_agent, decision.task)
         raise SupervisorLimitError("Maximum supervisor rounds reached")
+
+    @staticmethod
+    def _fallback_worker_answer(state: AgentState) -> str:
+        """Use completed worker results if the final structured decision is malformed."""
+        if _research_only_request(state.user_request):
+            researcher_outputs = [
+                output for output in state.agent_outputs if output.agent == "researcher"
+            ]
+            if researcher_outputs and researcher_outputs[-1].answer.strip():
+                return researcher_outputs[-1].answer.strip()
+
+        latest: dict[tuple[str, int | str | None], str] = {}
+        for output in state.agent_outputs:
+            task = output.task.split("\nReviewer feedback to fix:", 1)[0].strip()
+            key = (output.agent, output.planned_id if output.planned_id is not None else task)
+            if output.answer.strip():
+                latest[key] = output.answer.strip()
+        if not latest:
+            raise StructuredOutputError("Supervisor could not produce a final answer")
+        parts = list(latest.values())
+        if len(parts) == 1:
+            return (
+                "Agent çıktısı:\n" + parts[0]
+                + "\n\nSupervisor son yanıtı biçimlendiremedi; bu sonuç "
+                "tamamlanan agent çıktısından aktarıldı."
+            )
+        return (
+            "Tamamlanan agent çıktıları:\n\n"
+            + "\n\n".join(f"Çıktı {index}: {part}" for index, part in enumerate(parts, 1))
+            + "\n\nSupervisor son yanıtı biçimlendiremedi; tamamlanan çıktılar aktarıldı."
+        )
 
     async def run_planned(
         self, user_request: str, *, history: Sequence[ChatMessage] = ()
@@ -467,6 +556,25 @@ class Supervisor:
         except StructuredOutputError:
             record("plan_fallback", agent="supervisor")
             return await self.run(user_request, history=history)
+        if _research_only_request(user_request):
+            researcher = next(
+                (task for task in state.plan.tasks if task.agent == "researcher"), None
+            )
+            research_task = (
+                researcher.model_copy(update={"id": 1, "depends_on": []})
+                if researcher is not None else PlannedTask(
+                    id=1, agent="researcher", task=user_request, depends_on=[]
+                )
+            )
+            # A research-only request must never be converted into a report-writing task.
+            research_task.task = (
+                "Kişi biyografisi sorularında önce wikipedia_lookup ile Türkçe maddeyi ara; "
+                "bulunamazsa web_search kullan. Güncel ve diğer konularda web_search "
+                "kullan. Yalnızca araç sonuçlarındaki bilgileri ve kaynak URL'lerini ver. "
+                "Yeni dosya veya rapor oluşturma. "
+                "Kaynak sayısı gibi kullanıcı istemediği şartlar ekleme. " + user_request
+            )
+            state.plan = type(state.plan)(tasks=[research_task])
         if len(state.plan.tasks) + 1 > self._max_rounds:
             raise SupervisorLimitError("Plan exceeds maximum supervisor rounds")
         state.pending_tasks = [task.task for task in state.plan.tasks]
@@ -479,7 +587,10 @@ class Supervisor:
             planned_task = state.plan.tasks[index]
             if any(dependency not in completed_ids for dependency in planned_task.depends_on):
                 raise SupervisorLimitError("Plan dependency is not completed")
-            if planned_task.agent == "researcher":
+            if planned_task.agent == "researcher" and not (
+                self._reviewer is not None
+                and _research_only_request(user_request)
+            ):
                 batch = [planned_task]
                 for candidate in state.plan.tasks[index + 1:]:
                     if candidate.agent != "researcher" or any(
@@ -494,7 +605,11 @@ class Supervisor:
                     index += len(batch)
                     continue
             state.step_count += 1
-            if planned_task.agent in {"coder", "writer"} and self._reviewer is not None:
+            if (self._reviewer is not None and (
+                    planned_task.agent in {"coder", "writer"}
+                    or (planned_task.agent == "researcher"
+                        and _research_only_request(user_request))
+            )):
                 if not await self._run_reviewed_worker(
                     state, planned_task.agent, planned_task.task,
                     planned_id=planned_task.id,

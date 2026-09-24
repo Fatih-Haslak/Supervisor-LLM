@@ -23,6 +23,7 @@ class EvaluationCase(BaseModel):
     forbidden_answer_contains: list[str] = Field(default_factory=list)
     expected_language: Literal["tr", "en"] | None = "tr"
     expected_file_contains: dict[str, str] = Field(default_factory=dict)
+    expected_review_status: Literal["pass", "fail"] | None = None
     fixtures: dict[str, str] = Field(default_factory=dict, max_length=5)
 
 
@@ -40,6 +41,7 @@ class CaseScore(BaseModel):
     success: bool
     tools_match: bool
     route_match: bool | None = None
+    review_match: bool | None = None
     error_code: str | None = None
     files_match: bool = True
     language_match: bool = True
@@ -100,6 +102,11 @@ def evaluate(observations: list[EvaluationObservation]) -> EvaluationReport:
                 for phrase in case.forbidden_answer_contains
             )
         )
+        review_match: bool | None = None
+        if case.expected_review_status is not None:
+            review_match = bool(state and state.reviews and any(
+                review.status == case.expected_review_status for review in state.reviews
+            ))
         answer = state.final_answer if state else None
         english_words = re.findall(
             r"\b(?:the|has|been|was|were|successfully|passed|fixed|out|of|"
@@ -111,6 +118,7 @@ def evaluate(observations: list[EvaluationObservation]) -> EvaluationReport:
         )
         success = (
             answered and tools_match and route_match is not False
+            and review_match is not False
             and observation.files_match and language_match
             and observation.error_code is None
         )
@@ -118,6 +126,7 @@ def evaluate(observations: list[EvaluationObservation]) -> EvaluationReport:
             CaseScore(
                 id=case.id, success=success,
                 tools_match=tools_match, route_match=route_match,
+                review_match=review_match,
                 error_code=observation.error_code, files_match=observation.files_match,
                 language_match=language_match, answer=answer,
                 actual_tools=[call.tool for call in state.tool_results] if state else [],

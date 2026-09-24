@@ -1,8 +1,10 @@
 from collections.abc import Sequence
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
+from app.agents.reviewer import ReviewVerdict
 from app.agents.supervisor import Supervisor, SupervisorLimitError, WorkerResult
 from app.llm.schemas import ChatMessage, LLMResponse
 from app.llm.structured import StructuredOutputError
@@ -83,6 +85,57 @@ async def test_supervisor_delegates_then_synthesizes() -> None:
     assert "Worker result" in llm.requests[1][-1].content
     assert llm.schemas[0]["properties"]["action"]["const"] == "delegate"
     assert "oneOf" in llm.schemas[1]
+
+
+@pytest.mark.asyncio
+async def test_supervisor_routes_public_research_to_researcher_and_limits_assignment() -> None:
+    llm = ScriptedLLM([
+        '{"action":"delegate","next_agent":"general","task":"Üç kaynaktan rapor hazırla",'
+        '"reason":"Araştırma"}',
+        '{"action":"final_answer","answer":"Şenol Güneş hakkında kaynaklı kısa bilgi."}',
+    ])
+    researcher = ResearchWorker()
+    await Supervisor(
+        llm, {"general": FakeWorker(), "researcher": researcher}
+    ).run("Bana Şenol Güneş hakkında bilgi getir")
+    assert len(researcher.calls) == 1
+    assert "wikipedia_lookup" in researcher.calls[0]
+    assert "kaynak sayısı veya ek çıktı şartı uydurma" in researcher.calls[0]
+    assert "Üç kaynaktan rapor hazırla" not in researcher.calls[0]
+
+
+@pytest.mark.asyncio
+async def test_research_answer_survives_invalid_supervisor_final_decision() -> None:
+    answer = "Hüseyin Çimşir, eski futbolcu ve teknik direktördür. Kaynak: https://example.com"
+
+    class PersonResearcher:
+        async def run(self, _task: str, state: AgentState) -> WorkerResult:
+            assert state.current_agent == "researcher"
+            return WorkerResult(answer=answer)
+
+    class PassingReviewer:
+        async def review(self, *_args: object, **_kwargs: object) -> SimpleNamespace:
+            return SimpleNamespace(
+                verdict=ReviewVerdict(status="pass"), tool_calls=[]
+            )
+
+    llm = ScriptedLLM([
+        '{"action":"delegate","next_agent":"researcher","task":"Araştır",'
+        '"reason":"Kişi bilgisi"}',
+        "not json", "not json", "not json",
+    ])
+    recorder = TraceRecorder()
+    with trace_session(recorder):
+        state = await Supervisor(
+            llm, {"researcher": PersonResearcher()}, reviewer=PassingReviewer()
+        ).run("Huseyin Cimsir kimdir?")
+
+    assert state.final_answer == answer
+    assert state.reviews[0].status == "pass"
+    assert state.pending_tasks == []
+    assert any(event.event == "agent_error" for event in recorder.events)
+    assert any(event.event == "supervisor_fallback" and event.success
+               for event in recorder.events)
 
 
 @pytest.mark.asyncio

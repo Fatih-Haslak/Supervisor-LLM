@@ -123,10 +123,56 @@ class ReviewerAgent:
             dict.fromkeys(path for path in reversed(paths_found) if isinstance(path, str))
         )[:3]
         inline_code = _inline_code(user_request)
-        if not paths and inline_code is None:
+        wiki_calls = [
+            call for call in tools
+            if call.tool == "wikipedia_lookup" and call.result.success
+            and call.result.output
+        ]
+        public_sources: list[dict[str, str]] = []
+        for call in [call for call in tools if call.tool == "web_search"
+                     and call.result.success and call.result.output][-3:]:
+            try:
+                payload = json.loads(call.result.output or "")
+            except (ValueError, TypeError):
+                continue
+            rows = payload.get("results") if isinstance(payload, dict) else None
+            if not isinstance(rows, list):
+                continue
+            for source in rows[:5]:
+                if (not isinstance(source, dict) or not isinstance(source.get("title"), str)
+                        or not isinstance(source.get("snippet"), str)
+                        or not isinstance(source.get("url"), str)
+                        or not source["url"].startswith("https://")):
+                    continue
+                public_sources.append({
+                    "title": source["title"][:160], "extract": source["snippet"][:900],
+                    "url": source["url"][:500], "language": "web",
+                })
+        for call in wiki_calls[-3:]:
+            try:
+                source = json.loads(call.result.output or "")
+            except (ValueError, TypeError):
+                continue
+            if (isinstance(source, dict)
+                    and isinstance(source.get("title"), str)
+                    and isinstance(source.get("extract"), str)
+                    and isinstance(source.get("url"), str)
+                    and source["url"].startswith((
+                        "https://tr.wikipedia.org/wiki/",
+                        "https://en.wikipedia.org/wiki/",
+                    ))):
+                public_sources.append({
+                    "title": source["title"][:160],
+                    "extract": source["extract"][:1200],
+                    "url": source["url"][:500],
+                    "language": str(source.get("language", ""))[:8],
+                })
+        if not paths and inline_code is None and not public_sources:
             return ReviewResult(
                 verdict=ReviewVerdict(
-                    status="fail", issues=["No workspace file evidence available for review"]
+                    status="fail", issues=[
+                        "İnceleme için dosya, satır içi kod veya başarılı web kaynağı yok"
+                    ]
                 )
             )
         read_calls: list[ToolCallRecord] = []
@@ -279,6 +325,7 @@ class ReviewerAgent:
                  "error_type": call.result.error_type}
                 for call in tools[-8:]
             ],
+            "public_sources": public_sources,
             "written_files": files,
             "verified_csv_summary": (
                 verified_summary.model_dump() if verified_summary is not None else None
@@ -299,7 +346,10 @@ class ReviewerAgent:
                     "and an issues list. For pass, issues must be empty; for fail, give "
                     "specific actionable issues. When inline_code is present and there is no "
                     "workspace file, review the worker's explanation directly against that "
-                    "inline source; workspace file evidence is not required. Do not modify files."
+                    "inline source; workspace file evidence is not required. When public_sources "
+                    "are present, verify factual claims only against their extracts and require "
+                    "the answer to identify the matching source URL. Ignore unrelated conversation "
+                    "history and tool results from other tasks. Do not modify files."
                 ),
             ),
             ChatMessage(role="user", content=json.dumps(evidence, ensure_ascii=False)),

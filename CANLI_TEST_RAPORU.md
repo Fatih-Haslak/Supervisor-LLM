@@ -19,6 +19,21 @@ Yöntem: Gerçek tarayıcı arayüzünden prompt gönderildi; görev haritası, 
 | Router, tek agent, LangGraph, açık supervisor | Her modda seçilen görev ve araç sonucu doğrulandı. Router basit hesap için güven eşiği nedeniyle supervisor'a geçebildi. |
 | Hata ve izin sınırları | Olmayan dosya uydurulmadı; `.env` ve `workspace/../` erişimi reddedildi; reddedilen yazma işleminde dosya oluşmadı. |
 
+## Güncelleme: web araştırması ve arayüz belleği (24 Eylül 2026)
+
+| Kapsam | Sonuç |
+|---|---|
+| Gerçek web sağlayıcısı | Google News RSS üzerinden `Muhammed Salah Premier League takımları performansı kaynaklar` ve `Şenol Güneş` aramaları konuya uygun HTTPS haber kaynakları döndürdü; Bing RSS düşük alaka düzeyi gösterdiği için varsayılan sıradan çıkarıldı. |
+| Yerel arayüz | Güncellenmiş arayüz localhost tarayıcısında açıldı; Kalıcı bellek paneli görünür. |
+| Kalıcı bellek API akışı | Ayrı geçici SQLite veritabanında kayıt ekleme, listeleme ve silme HTTP üzerinden doğrulandı; deneme kaydı kaldırıldı. |
+| Uçtan uca araştırma | Bing ile çalışan ilk Şenol Güneş denemesi researcher → `web_search` → reviewer (`pass`) yolundan tamamlandı. Muhammed Salah denemesi ilgisiz Bing sonuçları ve geçersiz yapılandırılmış model çıktısı sorunlarını ortaya çıkardı; arama sağlayıcısı, kaynak bağlantısı temizliği ve model bozuk çıktısı yedek yanıtı düzeltildi. Yeniden tam model testi uzun üretim nedeniyle henüz doğrulanmadı. Her iki geçici konuşma kaydı da silindi. |
+| Otomatik testler | `pytest`: 173 geçti; Ruff temiz; mypy 53 dosyada temiz. Starlette TestClient kaynaklı tek deprecation uyarısı mevcut. |
+
+Web RSS sonuçları başlık ve kısa özetlere dayanır. Kaynak sayfasının tam içeriği
+otomatik açılmadığından reviewer özeti ve bağlantıyı denetler; bu, tam metin
+doğrulaması anlamına gelmez. Nihai yanıttaki web URL'leri yalnızca arama aracının
+döndürdüğü kaynaklarla sınırlandırılır.
+
 ## Bulunan ve giderilen sorun
 
 İlk kod düzeltme denemesinde (görev `37eb2e4153a24913918c15eb58749a3c`) planlayıcı inceleme ve düzeltmeyi ayrı adımlara böldü. Reviewer, salt okuma adımında henüz yapılmamış `function_test` sonucunu zorunlu tuttu; görev erken durdu. Reviewer artık geçerli test sonucunu yalnızca Python dosyası gerçekten yazılan agent adımında arıyor. Aynı senaryo yeniden çalıştırıldığında (görev `3f97ae7ecd894b339a2685dd102fc6a9`) 3/3 test ve reviewer ile tamamlandı.
@@ -46,3 +61,10 @@ Researcher, “Triton Server'ın işlevini araştır” görevinde modelin boş 
 - Başarılı Wikipedia araç sonucu supervisor'a kanıt olarak aktarılıyor. Son yanıt “makale yok” derse doğrulanmış başlık ve URL kullanılarak düzeltiliyor; URL unutulursa ekleniyor. İngilizce kaynaktan yapılan model çevirisi farklı bir uyruk uydurabildiği için İngilizce giriş metni özgün haliyle gösteriliyor.
 - Canlı arayüz görevi `37bd049559c4421d9412f2e15ef6d54c`, `Muhammed Salah (futbolcu)` isteğine Türkçe madde bağlantısıyla cevap verdi. `acee73742d4a4487932a02d09dccbec2` görevinde 2004 doğumlu başka bir Mo Salah için İngilizce makale seçildi, fakat model `Belgian` yerine yanlışlıkla `Birleşik Krallık` dedi. Düzeltme sonrası `709dd864f958450b9045ed295529f833` görevinde kaynak metni özgün haliyle (`Belgian professional footballer`) ve doğru İngilizce URL ile gösterildi.
 - Son tam doğrulama: **158 test geçti**, Ruff ve mypy geçti. Wikipedia'nın makale içeriği ayrıca bağımsız bir ikinci kaynakla doğrulanmıyor; güncel kulüp veya unvan gibi değişken bilgiler bu sınır içinde yorumlanmalı.
+
+## 24 Eylül 2026: Wikipedia araştırmasının Reviewer ile incelenmesi
+
+- Kullanıcının “Şenol Güneş hakkında bilgi getir ve bunu reviewer'a sok” isteği canlı arayüzde önce hatalı biçimde araştırma + rapor yazma planına dönüştü. Onay ekranındaki raporda önceki CSV senaryosunun tutarları da vardı; dosya yazma onayı reddedildi. Bu, reviewer'ın araştırma yanıtı için kaynak kanıtı kabul etmemesi ve açık reviewer isteğinin planlamada dosya üretimi sanılması sorunlarını görünür kıldı.
+- Reviewer artık başarılı `wikipedia_lookup` sonucundaki başlık, alıntı metni ve Wikipedia URL'sini kanıt olarak alıyor. Açık reviewer isteğiyle yapılan salt araştırmada plan araştırmacıyla sınırlandırılıyor; araştırma yanıtı reviewer'dan geçiyor, rapor yazarı ve dosya yazma aracı çalışmıyor.
+- Canlı arayüzde önce görev `6358b919dc5240fd81d515e1c4fb14c5` ile araştırma + reviewer akışı, sonra ilk kullanıcı ifadesi aynen görev `da6bf8431d0b4d9f8df0360b6abe568e` ile tekrarlandı. İkisinde de Wikipedia aracı başarılı, Reviewer ilk denemede geçti, görev tamamlandı ve dosya yazma/onay isteği oluşmadı.
+- Yeni reviewer regresyon testleri Wikipedia kanıtının reviewer'a taşınmasını, açık araştırma-review isteğinde rapor yazma adımının elenmesini ve ilgili CSV rapor akışının bozulmamasını kapsıyor. Son tam paket: **160 test geçti**; Ruff ve mypy geçti. Tek uyarı Starlette test istemcisinin kullandığı AnyIO API'sinin bağımlılık kaynaklı deprecation uyarısı.

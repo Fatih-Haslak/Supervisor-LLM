@@ -67,6 +67,7 @@ async def test_tool_and_code_requests_cannot_fall_into_chat() -> None:
     router = AutoModeRouter(llm)
     assert await router.select("workspace/note.txt dosyasını oku") == "supervisor"
     assert await router.select("Fatih Tekke kimdir?") == "supervisor"
+    assert await router.select("Bana Şenol Güneş hakkında bilgi getir") == "supervisor"
     assert await router.select("```python\ndef f(n): return n\n```\nAnaliz et") == "supervisor"
 
 

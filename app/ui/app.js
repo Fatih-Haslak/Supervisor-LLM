@@ -13,18 +13,20 @@ const errorEl = document.getElementById("ui-error");
 const answerEl = document.getElementById("answer-text");
 const flowGraph = document.getElementById("flow-graph");
 const flowSummary = document.getElementById("flow-summary");
+const flowInspector = document.getElementById("flow-inspector");
 let stream = null;
 let activeTask = null;
+let selectedFlowNode = null;
 let conversationId = localStorage.getItem("agent-conversation-id") || crypto.randomUUID();
 let loadedTask = null;
 localStorage.setItem("agent-conversation-id", conversationId);
 const modeDescriptions = {
-  auto: "Yerel model isteğe ve sohbet geçmişine bakarak sohbet, tek agent, supervisor veya planlı akışı seçer.",
-  plan: "Görevi adımlara ayırır, uzman agent'lara verir ve yazılan dosyaları reviewer ile kontrol eder.",
-  supervisor: "Supervisor her turda sıradaki agent'ı seçer. Çok adımlı görevler için deneysel alternatiftir.",
-  router: "Önce basit görevleri tek uzmana yönlendirir; karmaşık işlerde supervisor'a geçer.",
-  single: "Tek agent kendi araçlarını kullanır; uzmanlar arasında görev dağıtmaz.",
-  graph: "Aynı yerel model ve uzmanları LangGraph akış motoruyla çalıştırır."
+  auto: "Önerilen: model sohbeti tanır; araç, uzman veya plan gerekip gerekmediğini seçer.",
+  plan: "Önce görev adımlarını çıkarır; uzmanlar sırayla çalışır ve gereken çıktılar denetlenir.",
+  supervisor: "Supervisor her adımda uygun uzmanı seçer ve sonucu toplar.",
+  router: "İsteği doğrudan uygun uzmana yönlendirir; daha kısa bir akış kullanır.",
+  single: "Tek agent kendi izinli araçlarını kullanarak görevi tamamlar.",
+  graph: "Aynı agent akışını LangGraph motoruyla yürütür. Geliştirici kullanımı içindir."
 };
 const chatHistory = document.getElementById("chat-history");
 const agentLabels = {
@@ -37,11 +39,11 @@ const toolLabels = {
   wikipedia_lookup: "Wikipedia araştırması", search: "Belge arama",
   file_read: "Dosya okuma", file_write: "Dosya yazma",
   directory_list: "Klasör listeleme", calculator: "Hesap makinesi",
-  csv_summary: "CSV analizi", function_test: "Fonksiyon testi",
+  csv_summary: "CSV analizi", function_test: "Fonksiyon testi", web_search: "Web araştırması",
   python_exec: "Python çalıştırma"
 };
 const modeLabels = {
-  auto: "Otomatik seçim", plan: "Planlı supervisor", supervisor: "Supervisor",
+  auto: "Otomatik seçim", plan: "Adımlı görev", supervisor: "Uzman ekip",
   router: "Hızlı router", single: "Tek agent", graph: "LangGraph motoru"
 };
 const stateLabels = {
@@ -63,176 +65,231 @@ function agentIsActive(view, agent) {
   return last?.event === "agent_enter" && view.status === "running";
 }
 
-function graphItem(label, detail, state = "done") {
-  return { label, detail, state };
+function makeFlowNode(id, parents, level, label, detail, state, explanation) {
+  return { id, parents: parents ? [].concat(parents) : [], level, label, detail, state, explanation };
 }
 
-function makeFlowStage(stage) {
-  const article = document.createElement("article");
-  article.className = "flow-stage";
-  article.dataset.state = stage.state;
-  const head = document.createElement("div");
-  head.className = "flow-stage-head";
-  const number = document.createElement("span");
-  number.className = "flow-number";
-  number.textContent = stage.number;
-  const titleWrap = document.createElement("div");
-  const title = document.createElement("h4");
-  title.textContent = stage.title;
-  const status = document.createElement("span");
-  status.className = "flow-state";
-  status.textContent = stateLabels[stage.state];
-  titleWrap.append(title, status);
-  head.append(number, titleWrap);
-  const caption = document.createElement("p");
-  caption.className = "flow-caption";
-  caption.textContent = stage.caption;
-  const items = document.createElement("div");
-  items.className = "flow-node-list";
-  for (const entry of stage.items) {
-    const item = document.createElement("div");
-    item.className = "flow-node";
-    item.dataset.state = entry.state;
-    const dot = document.createElement("i");
-    dot.setAttribute("aria-hidden", "true");
-    const copy = document.createElement("div");
-    const strong = document.createElement("strong");
-    strong.textContent = entry.label;
-    copy.append(strong);
-    if (entry.detail) {
-      const small = document.createElement("small");
-      small.textContent = entry.detail;
-      copy.append(small);
+function makeFlowCard(node) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "flow-card";
+  button.dataset.nodeId = node.id;
+  button.dataset.state = node.state;
+  button.setAttribute("aria-pressed", String(selectedFlowNode === node.id));
+  button.setAttribute("aria-label", `${node.label}. ${stateLabels[node.state]}. ${node.detail}`);
+  const icon = document.createElement("span");
+  icon.className = "flow-card-icon";
+  icon.setAttribute("aria-hidden", "true");
+  icon.textContent = node.state === "done" ? "✓" : node.state === "failed" ? "!" : "·";
+  const title = document.createElement("strong");
+  title.textContent = node.label;
+  const state = document.createElement("small");
+  state.className = "flow-card-state";
+  state.textContent = stateLabels[node.state] || "Sırada";
+  const detail = document.createElement("span");
+  detail.className = "flow-card-detail";
+  detail.textContent = node.detail;
+  button.append(icon, title, state, detail);
+  button.addEventListener("click", () => {
+    selectedFlowNode = node.id;
+    flowGraph.querySelectorAll(".flow-card").forEach((card) => {
+      card.setAttribute("aria-pressed", String(card.dataset.nodeId === selectedFlowNode));
+    });
+    showFlowNode(node);
+  });
+  return button;
+}
+
+function showFlowNode(node) {
+  const title = document.createElement("strong");
+  title.textContent = `${node.label} · ${stateLabels[node.state] || "Sırada"}`;
+  const description = document.createElement("p");
+  description.textContent = node.explanation;
+  const detail = document.createElement("small");
+  detail.textContent = node.detail;
+  flowInspector.replaceChildren(title, description, detail);
+}
+
+function renderTreeEdges(canvas, nodes, positions, width, height) {
+  const svgNs = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(svgNs, "svg");
+  svg.classList.add("flow-tree-edges");
+  svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+  svg.setAttribute("aria-hidden", "true");
+  for (const node of nodes) {
+    const child = positions.get(node.id);
+    if (!child) continue;
+    for (const parentId of node.parents) {
+      const parent = positions.get(parentId);
+      if (!parent) continue;
+      const path = document.createElementNS(svgNs, "path");
+      const startY = parent.y + 60;
+      const endY = child.y - 60;
+      const curve = Math.max(28, (endY - startY) * 0.42);
+      path.setAttribute("d", `M ${parent.x} ${startY} C ${parent.x} ${startY + curve}, ${child.x} ${endY - curve}, ${child.x} ${endY}`);
+      path.dataset.state = node.state === "active" ? "active"
+        : node.state === "failed" ? "failed"
+        : node.state === "done" && ["done", "skipped"].includes(parent.state) ? "done" : "waiting";
+      svg.append(path);
     }
-    item.append(dot, copy);
-    items.append(item);
   }
-  article.append(head, caption, items);
-  return article;
+  canvas.append(svg);
 }
 
 function renderFlowGraph(view) {
   const failed = view.status === "failed";
   const finished = view.status === "completed";
   const running = view.status === "running" || view.status === "waiting_approval";
-  const managerEvents = view.events.filter((event) =>
-    ["supervisor", "router", "planner", "mode_router"].includes(event.agent)
-    || ["route_selected", "mode_selected", "plan_fallback"].includes(event.event)
+  const managerNames = ["supervisor", "router", "planner", "mode_router"];
+  const systemAgents = new Set([...managerNames, "reviewer"]);
+  const managerEvents = view.events.filter((event) => managerNames.includes(event.agent)
+    || ["route_selected", "mode_selected", "plan_fallback"].includes(event.event));
+  const lastManagerError = [...view.events].reverse().find((event) =>
+    event.event === "agent_error" && managerNames.includes(event.agent)
   );
-  const systemAgents = new Set(["supervisor", "router", "planner", "mode_router", "reviewer"]);
-  const workerNames = unique([
-    ...(view.plan?.tasks || []).map((task) => task.agent),
-    ...view.agent_outputs.map((output) => output.agent),
-    ...view.events.map((event) => event.agent).filter((agent) => agent && !systemAgents.has(agent)),
-    view.route?.selected_agent === "supervisor" ? null : view.route?.selected_agent
-  ]);
-  if (view.mode === "single" && !workerNames.length && view.events.length) workerNames.push("single");
-  const eventTools = view.events.filter((event) => event.event === "tool_call");
-  const toolNames = unique([...view.tool_calls.map((call) => call.tool), ...eventTools.map((e) => e.tool)]);
-  const reviewEvents = view.events.filter((event) => event.event === "review_verdict");
-  const hasReview = view.reviews.length > 0 || reviewEvents.length > 0;
-  const managerFailed = view.events.some((event) =>
-    event.event === "agent_error" && ["supervisor", "router", "planner", "mode_router"].includes(event.agent)
-  );
-  const workerFailed = view.events.some((event) =>
-    event.event === "agent_error" && event.agent && !systemAgents.has(event.agent)
-  );
-  const toolFailed = view.tool_calls.some((call) => !call.result.success)
-    || eventTools.some((event) => event.success === false);
-  const activeWorker = workerNames.some((agent) => agentIsActive(view, agent));
-  const managerActive = ["supervisor", "router", "planner", "mode_router"].some((agent) =>
-    agentIsActive(view, agent)
-  );
-  const directSingle = workerNames.includes("single")
-    && !managerEvents.some((event) => event.agent === "supervisor" || event.agent === "planner");
-
-  let managerState = "waiting";
-  if (managerFailed) managerState = "failed";
-  else if (managerActive || (running && managerEvents.length === 0
-      && view.mode !== "single" && !directSingle)) {
-    managerState = "active";
-  } else if (managerEvents.length || view.plan || view.route || view.agent_outputs.length) {
-    managerState = "done";
-  } else if (finished || view.mode === "single" || directSingle) managerState = "skipped";
-
-  let workerState = "waiting";
-  if (workerFailed) workerState = "failed";
-  else if (activeWorker) workerState = "active";
-  else if (workerNames.length && (view.agent_outputs.length || finished || failed)) workerState = "done";
-  else if (finished && !workerNames.length) workerState = "skipped";
-
-  let toolState = "waiting";
-  if (toolFailed) toolState = "failed";
-  else if (view.status === "waiting_approval") toolState = "approval";
-  else if (toolNames.length) toolState = "done";
-  else if (finished) toolState = "skipped";
-
-  const reviewState = hasReview
-    ? (view.reviews.some((review) => review.status === "fail") ? "failed" : "done")
-    : (finished ? "skipped" : "waiting");
-  const answerState = finished ? "done" : failed ? "failed" : "waiting";
+  const lastRecovery = [...view.events].reverse().find((event) => event.event === "supervisor_fallback");
+  const managerFailed = Boolean(lastManagerError
+    && (!lastRecovery || lastRecovery.sequence < lastManagerError.sequence));
+  const managerActive = managerNames.some((agent) => agentIsActive(view, agent));
   const selectedMode = [...view.events].reverse().find((event) => event.event === "mode_selected")?.mode;
+  const managerLabel = managerEvents.some((event) => ["supervisor", "planner"].includes(event.agent))
+    ? "Supervisor / planlayıcı" : "Mod yönlendiricisi";
   const managerDetail = view.route
     ? `${agentLabels[view.route.selected_agent] || view.route.selected_agent} seçildi`
     : modeLabels[selectedMode] || modeLabels[view.mode] || view.mode;
+  const managerState = managerFailed ? "failed" : managerActive ? "active"
+    : managerEvents.length || view.plan || view.route || view.agent_outputs.length ? "done"
+      : running && view.mode !== "single" ? "active" : finished && view.mode === "single" ? "skipped" : "waiting";
 
-  const stages = [
-    {
-      number: "01", title: "İstek", state: failed ? "failed" : "done",
-      caption: "Mesaj ve konuşma geçmişi alınır.",
-      items: [graphItem("Senin mesajın", view.message.length > 54 ? `${view.message.slice(0, 54)}…` : view.message)]
-    },
-    {
-      number: "02", title: "Yönetici", state: managerState,
-      caption: "Görevin nasıl yürütüleceğine karar verir.",
-      items: [graphItem(
-        managerEvents.some((event) => ["supervisor", "planner"].includes(event.agent))
-          ? "Supervisor / Planlayıcı" : "Mod yönlendiricisi",
-        managerDetail, managerState
-      )]
-    },
-    {
-      number: "03", title: "Uzmanlar", state: workerState,
-      caption: "İşi uygun uzman agent gerçekleştirir.",
-      items: workerNames.length ? workerNames.map((name) => graphItem(
-        agentLabels[name] || name,
-        view.agent_outputs.find((output) => output.agent === name)?.task || "Atanan görev",
-        agentIsActive(view, name) ? "active" : workerFailed ? "failed" : "done"
-      )) : [graphItem("Uzman agent", "Bu görevde uzman seçilmedi.", workerState)]
-    },
-    {
-      number: "04", title: "Araçlar", state: toolState,
-      caption: "Dosya, hesaplama veya araştırma araçları çalışır.",
-      items: toolNames.length ? toolNames.map((name) => {
-        const call = view.tool_calls.find((entry) => entry.tool === name);
-        const event = [...eventTools].reverse().find((entry) => entry.tool === name);
-        const success = call ? call.result.success : event?.success !== false;
-        return graphItem(toolLabels[name] || name, success ? "Başarılı" : "Araç hatası", success ? "done" : "failed");
-      }) : [graphItem("Araç çağrısı", "Bu görevde araç kullanılmadı.", toolState)]
-    },
-    {
-      number: "05", title: "Kontrol", state: reviewState,
-      caption: "Gerekli görevlerde reviewer sonucu doğrular.",
-      items: hasReview ? view.reviews.map((review) => graphItem(
-        "Reviewer", review.status === "pass" ? "Kontrolden geçti" : "Düzeltme istedi",
-        review.status === "pass" ? "done" : "failed"
-      )) : [graphItem("Reviewer", "Bu görevde inceleme gerekmedi.", reviewState)]
-    },
-    {
-      number: "06", title: "Yanıt", state: answerState,
-      caption: "Toplanan sonuç tek yanıta dönüştürülür.",
-      items: [graphItem(
-        finished ? "Yanıt hazır" : failed ? "Görev tamamlanamadı" : "Yanıt hazırlanıyor",
-        finished ? "Sohbete eklendi" : failed ? view.error?.code || "Hata" : "Önceki aşamalar bekleniyor",
-        answerState
-      )]
-    }
-  ];
-  flowGraph.replaceChildren(...stages.map(makeFlowStage));
+  const workerSpecs = view.plan?.tasks?.length
+    ? view.plan.tasks.map((task) => ({ id: `worker-${task.id}`, agent: task.agent, task: task.task, plannedId: task.id }))
+    : unique([
+      ...view.agent_outputs.map((output) => output.agent),
+      ...view.events.map((event) => event.agent).filter((agent) => agent && !systemAgents.has(agent)),
+      view.route?.selected_agent === "supervisor" ? null : view.route?.selected_agent,
+      view.mode === "single" && view.events.length ? "single" : null
+    ]).map((agent, index) => ({ id: `worker-${index}`, agent, task: null, plannedId: null }));
+  const workers = workerSpecs.map((worker) => {
+    const output = view.agent_outputs.find((entry) => worker.plannedId
+      ? entry.planned_id === worker.plannedId : entry.agent === worker.agent);
+    const hasError = view.events.some((event) => event.event === "agent_error" && event.agent === worker.agent);
+    const state = agentIsActive(view, worker.agent) ? "active"
+      : hasError ? "failed" : output ? "done" : finished ? "done" : "waiting";
+    return { ...worker, output, state };
+  });
+  const eventTools = view.events.filter((event) => event.event === "tool_call");
+  const toolSpecs = view.tool_calls.length
+    ? view.tool_calls.map((call, index) => ({ tool: call.tool, state: call.result.success ? "done" : "failed", index }))
+    : eventTools.map((event, index) => ({ tool: event.tool, state: event.success === false ? "failed" : "done", index }));
+  const tools = toolSpecs.slice(0, 12).map((tool, index) => ({
+    id: `tool-${index}`, tool: tool.tool, state: tool.state,
+    detail: tool.state === "failed" ? "Araç hata döndürdü" : "Araç sonucu alındı"
+  }));
+  if (view.pending_approval && !tools.some((tool) => tool.tool === view.pending_approval.tool)) {
+    tools.push({
+      id: `tool-approval-${tools.length}`, tool: view.pending_approval.tool,
+      state: "approval", detail: "Onay yanıtın bekleniyor"
+    });
+  }
+  const reviewEvents = view.events.filter((event) => event.event === "review_verdict");
+  const reviewSpecs = view.reviews.length ? view.reviews : reviewEvents.map((event, index) => ({
+    agent: "reviewer", attempt: index + 1, status: event.success === false ? "fail" : "pass", task: "Sonucu kontrol etti", issues: []
+  }));
+  if (!reviewSpecs.length && agentIsActive(view, "reviewer")) {
+    reviewSpecs.push({ agent: "reviewer", attempt: 1, status: "active", task: "Çıktıyı inceliyor", issues: [] });
+  }
+  const reviews = reviewSpecs.map((review, index) => ({
+    id: `review-${index}`, label: `Reviewer · ${review.attempt}. kontrol`,
+    state: review.status === "active" ? "active" : review.status === "pass" ? "done" : "failed",
+    detail: review.status === "active" ? "Çıktıyı inceliyor"
+      : review.status === "pass" ? "Kontrolden geçti" : "Düzeltme istedi",
+    explanation: review.issues?.length ? `Kontrol notu: ${review.issues.join("; ")}` : "Reviewer, agent çıktısını ve varsa araç kanıtlarını kontrol eder."
+  }));
+  const answerState = finished ? "done" : failed ? "failed" : "waiting";
+  const nodes = [];
+  const request = makeFlowNode("request", null, 0, "Senin isteğin",
+    view.message.length > 72 ? `${view.message.slice(0, 72)}…` : view.message,
+    "done", "Mesajın ve bu konuşmanın geçmişi görev girdisi olarak alınır.");
+  const manager = makeFlowNode("manager", "request", 1, managerLabel, managerDetail,
+    managerState, "İsteğin türüne göre doğrudan sohbeti sürdürür, bir agent seçer veya işi uzmanlara böler.");
+  nodes.push(request, manager);
+  for (const [index, worker] of workers.entries()) {
+    const task = worker.task || worker.output?.task || "Görev için seçilen uzman";
+    nodes.push(makeFlowNode(worker.id, "manager", 2,
+      agentLabels[worker.agent] || worker.agent, task, worker.state,
+      `Bu agent kendisine verilen alt görevi yapar.${worker.output?.answer ? ` Çıktı: ${worker.output.answer.slice(0, 180)}` : ""}`));
+  }
+  for (const tool of tools) {
+    nodes.push(makeFlowNode(tool.id, "manager", 2,
+      toolLabels[tool.tool] || tool.tool, tool.detail, tool.state,
+      "Agent bu aracı kullanarak hesaplama, dosya işlemi veya kaynak araştırması yapar."));
+  }
+  let branchLeaves = [...workers.map((worker) => worker.id), ...tools.map((tool) => tool.id)];
+  if (!branchLeaves.length) {
+    const idleState = finished ? "skipped" : failed ? "failed" : "waiting";
+    nodes.push(makeFlowNode("no-specialist", "manager", 2, "Ek agent veya araç yok",
+      "Bu görevde uzman/araç gerekmedi", idleState,
+      "Basit sohbet isteklerinde sistem doğrudan yanıt verebilir."));
+    branchLeaves = ["no-specialist"];
+  }
+  let previousReviewIds = branchLeaves;
+  for (const review of reviews) {
+    nodes.push(makeFlowNode(review.id, previousReviewIds, 3, review.label,
+      review.detail, review.state, review.explanation));
+    previousReviewIds = [review.id];
+  }
+  if (!reviews.length) {
+    nodes.push(makeFlowNode("review-skipped", branchLeaves, 3, "Reviewer",
+      finished ? "İnceleme gerekmedi" : "İnceleme bekleniyor",
+      finished ? "skipped" : "waiting",
+      "Kod veya araştırma gibi görevlerde reviewer çıktıyı doğrulayabilir."));
+  }
+  nodes.push(makeFlowNode("answer", reviews.length ? reviews.at(-1).id : "review-skipped", 4,
+    finished ? "Yanıt hazır" : failed ? "Görev durdu" : "Yanıt hazırlanıyor",
+    finished ? "Sonuç sohbete eklendi" : failed ? view.error?.code || "Görev tamamlanamadı" : "Önceki adımlar bekleniyor",
+    answerState, "Supervisor agent ve araç sonuçlarını birleştirip son yanıtı konuşmaya ekler."));
+
+  const viewportWidth = Math.max(flowGraph.clientWidth, 760);
+  const canvasWidth = Math.max(viewportWidth, (Math.max(workers.length + tools.length, 1) * 236) + 80);
+  const rows = [60, 225, 400, 580, 760];
+  const levelCounts = new Map();
+  for (const node of nodes) levelCounts.set(node.level, (levelCounts.get(node.level) || 0) + 1);
+  const levelIndexes = new Map();
+  const positions = new Map();
+  for (const node of nodes) {
+    const count = levelCounts.get(node.level);
+    const index = levelIndexes.get(node.level) || 0;
+    levelIndexes.set(node.level, index + 1);
+    const x = canvasWidth * ((index + 0.5) / count);
+    const y = rows[node.level] ?? rows.at(-1);
+    positions.set(node.id, { x, y, state: node.state });
+  }
+  flowGraph.replaceChildren();
+  const viewport = document.createElement("div");
+  viewport.className = "flow-tree-viewport";
+  viewport.setAttribute("tabindex", "0");
+  viewport.setAttribute("aria-label", "Görev ağacı. Geniş görünümde yana kaydırılabilir.");
+  const canvas = document.createElement("div");
+  canvas.className = "flow-tree-canvas";
+  canvas.style.width = `${canvasWidth}px`;
+  canvas.style.height = "840px";
+  renderTreeEdges(canvas, nodes, positions, canvasWidth, 840);
+  for (const node of nodes) {
+    const card = makeFlowCard(node);
+    const position = positions.get(node.id);
+    card.style.left = `${position.x}px`;
+    card.style.top = `${position.y}px`;
+    canvas.append(card);
+  }
+  viewport.append(canvas);
+  flowGraph.append(viewport);
+  const currentSelection = nodes.find((node) => node.id === selectedFlowNode)
+    || nodes.find((node) => node.state === "active") || nodes.at(-1);
+  if (currentSelection && selectedFlowNode) showFlowNode(currentSelection);
 
   const last = latestEvent(view, [
     "task_failed", "task_completed", "approval_requested", "review_verdict",
-    "tool_call", "agent_enter", "route_selected", "mode_selected", "task_started"
+    "tool_call", "supervisor_fallback", "agent_enter", "route_selected", "mode_selected", "task_started"
   ]);
   const activeLabel = last?.agent ? agentLabels[last.agent] || last.agent : null;
   const activeTool = last?.tool ? toolLabels[last.tool] || last.tool : null;
@@ -241,14 +298,18 @@ function renderFlowGraph(view) {
     route_selected: `${activeLabel || "Uzman agent"} seçildi.`,
     mode_selected: `${modeLabels[last?.mode] || "Çalışma biçimi"} seçildi.`,
     agent_enter: `${activeLabel || "Agent"} şu anda çalışıyor.`,
-    tool_call: `${activeTool || "Araç"} çalışmasını tamamladı.`,
+    tool_call: `${activeTool || "Araç"} çalıştı.`,
     review_verdict: "Reviewer sonucu kontrol etti.",
+    supervisor_fallback: "Supervisor son biçimi üretemedi; tamamlanan agent çıktısı kullanıldı.",
     approval_requested: "Dosya işlemi için onayın bekleniyor.",
     task_completed: "Akış tamamlandı; yanıt sohbete eklendi.",
     task_failed: `Akış ${view.error?.code || "bir hata"} nedeniyle durdu.`
   };
-  flowSummary.textContent = summaries[last?.event] || (view.status === "queued"
-    ? "Görev sıraya alındı." : "Görev akışı hazırlanıyor.");
+  flowSummary.textContent = failed ? summaries.task_failed
+    : finished ? summaries.task_completed
+      : view.status === "waiting_approval" ? summaries.approval_requested
+        : summaries[last?.event] || (view.status === "queued"
+          ? "Görev sıraya alındı." : "Görev akışı hazırlanıyor.");
   flowGraph.setAttribute("aria-label", `Agent görev akışı. ${flowSummary.textContent}`);
 }
 
@@ -275,6 +336,52 @@ async function loadConversation() {
 }
 
 loadConversation().catch((error) => showError(error.message));
+
+const memoryForm = document.getElementById("memory-form");
+const memoryList = document.getElementById("memory-list");
+const memoryError = document.getElementById("memory-error");
+
+async function loadMemories() {
+  const response = await fetch("/memories");
+  if (!response.ok) throw new Error("Bellek yüklenemedi.");
+  const data = await response.json();
+  if (!data.memories.length) return empty(memoryList, "Henüz kalıcı bellek kaydı yok.");
+  memoryList.replaceChildren(...data.memories.map((entry) => {
+    const row = document.createElement("article");
+    row.className = "memory-entry";
+    const copy = document.createElement("div");
+    const title = document.createElement("strong");
+    const category = {preference:"Tercih",decision:"Karar",fact:"Bilgi"}[entry.category];
+    title.textContent = `${entry.key} · ${category}`;
+    const value = document.createElement("p");
+    value.textContent = entry.value;
+    copy.append(title, value);
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "secondary";
+    remove.textContent = "Sil";
+    remove.addEventListener("click", async () => {
+      const deleted = await fetch(`/memories/${encodeURIComponent(entry.key)}`, { method: "DELETE" });
+      if (!deleted.ok) { memoryError.textContent = "Bellek silinemedi."; memoryError.hidden = false; return; }
+      loadMemories().catch((error) => { memoryError.textContent = error.message; memoryError.hidden = false; });
+    });
+    row.append(copy, remove);
+    return row;
+  }));
+}
+
+loadMemories().catch((error) => { memoryError.textContent = error.message; memoryError.hidden = false; });
+memoryForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  memoryError.hidden = true;
+  const payload = Object.fromEntries(new FormData(memoryForm));
+  try {
+    const response = await fetch("/memories", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+    if (!response.ok) throw new Error(response.status === 422 ? "Anahtarı ve bilgiyi kontrol et. Gizli bilgi belleğe kaydedilmez." : "Bellek kaydedilemedi.");
+    memoryForm.reset();
+    await loadMemories();
+  } catch (error) { memoryError.textContent = error.message; memoryError.hidden = false; }
+});
 
 document.getElementById("new-chat-button").addEventListener("click", async () => {
   if (activeTask && runButton.disabled) return;
@@ -307,7 +414,8 @@ const eventLabels = {
   plan_fallback: "Plan üretilemedi; supervisor devam ediyor",
   review_verdict: "Reviewer karar verdi", route_selected: "Agent seçildi",
   mode_selected: "Çalışma biçimi seçildi",
-  approval_requested: "Onay istendi", approval_resolved: "Onay yanıtlandı"
+  approval_requested: "Onay istendi", approval_resolved: "Onay yanıtlandı",
+  supervisor_fallback: "Agent çıktısından yedek yanıt oluşturuldu"
 };
 
 function showError(message) {

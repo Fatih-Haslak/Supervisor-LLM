@@ -149,12 +149,20 @@ Hepsi aynı GGUF model örneğini kullanır, fakat prompt ve araç izinleri ayr�
 
 `search` aracı yalnızca `workspace/` altındaki UTF-8 metinlerde arama yapar.
 API'nin Otomatik modunda kamuya açık konu ve kişi soruları için
-`wikipedia_lookup`, yalnızca başlığı `tr.wikipedia.org` adresine gönderir ve
-kaynak bağlantısını yanıta ekler. Bu ağ aracı varsayılan olarak açıktır;
+`web_search` kamuya açık web'de konu arar ve en fazla beş kısa alıntı ile HTTPS
+kaynak adresi döndürür. Araştırmacı bu kaynakları kullanır; reviewer araştırma
+çıktısını alıntılarla karşılaştırır ve başarılı aramadan gelen kaynakları yanıta
+ekler. Wikipedia biyografiler için ek bir araçtır. Bu ağ araçları varsayılan olarak açıktır;
 `.env` içinde `AGENT_WEB_LOOKUP_ENABLED=false` ile kapatılabilir. CLI agent
 modu yerel kalır. Wikipedia bulunamaz veya ağ erişimi başarısız olursa sistem
 bilgiyi doğrulayamadığını söylemelidir; güncel veya yüksek önem taşıyan bilgi
 için tek kaynak yeterli olmayabilir.
+
+Web araması varsayılan olarak Google News RSS sonuçlarını, sonuç bulunmazsa Bing
+RSS'i kullanır; iki RSS arayüzü de sağlayıcıya bağlıdır ve değişebilir. İsteğe
+bağlı `AGENT_WEB_SEARCH_API_KEY` ayarı resmi Brave
+Search API yolunu etkinleştirir. Arama yalnızca başlık, kısa özet ve kaynak URL'si
+getirir; sistem kaynak sayfalarını açıp tam metin doğrulaması yapmaz.
 
 `--plan` seçeneği supervisor'dan önce 1–4 alt görevli yapılandırılmış bir plan
 ister. Plan görevlerinin agent adları, benzersiz kimlikleri ve bağımlılıkları
@@ -195,7 +203,8 @@ kaydedilmez:
 ```
 
 Sonraki sohbet ve agent görevleri en güncel 20 kaydı model bağlamında kullanır.
-Etkileşimli oturum açıksa yeni kayıtların görünmesi için oturumu yeniden başlatın.
+Web arayüzündeki **Kalıcı bellek** panelinden kayıt ekleyebilir, listeleyebilir ve
+silebilir; değişiklikler sonraki görevlerde hemen kullanılır.
 Güncel kullanıcı isteği kayıtla çelişirse güncel istek önceliklidir. Bellek
 veritabanı varsayılan olarak `.local/agent_memory.sqlite3` yolundadır ve Git
 tarafından yok sayılır; `AGENT_MEMORY_DB_PATH` ile değiştirilebilir. API anahtarı,
