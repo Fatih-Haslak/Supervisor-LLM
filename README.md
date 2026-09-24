@@ -5,6 +5,12 @@ GGUF modeli Python sürecinde doğrudan yüklenir; LM Studio sunucusu ve API tok
 gerekmez. Tek agent döngüsü, görev başına merkezi `AgentState`, supervisor
 yönlendirmesi ve uzman worker'lar vardır.
 
+Kod dosyalarını tek tek incelemek için [Türkçe kod rehberine](KOD_REHBERI.md)
+bakın. Agentların tam system promptları, tool izin matrisi ve çalışma akışının
+ayrıntılı PDF açıklaması
+[`output/pdf/yerel-agent-sistemi-mimari-ve-prompt-raporu.pdf`](output/pdf/yerel-agent-sistemi-mimari-ve-prompt-raporu.pdf)
+dosyasındadır.
+
 ## Hangi çalışma biçimini kullanmalıyım?
 
 Arayüzün varsayılanı **Otomatik**. Kısa sohbet ve açık aritmetik hızlıca
@@ -15,15 +21,26 @@ istekleri için güvenli yönlendirme kuralları uygulanır. Çok adımlı istek
 planlayıcı işi uzman worker'lara dağıtır:
 
 ```text
-Kullanıcı → Supervisor/Planner → uzman agent → araçlar → Reviewer → tek yanıt
-                         └──────────── tek yerel GGUF modeli ────────────┘
+Kullanıcı → AutoModeRouter → chat / single / supervisor / plan
+                                  ↓
+                           Supervisor LLM
+                                  ↓
+                      uzman worker ↔ izinli tools
+                                  ↓
+                    gerekliyse Reviewer → tek yanıt
+
+İsteğe bağlı graph modu: LangGraph, Supervisor/worker/Reviewer geçişlerini yönetir.
+Diğer modlarda supervisor akışı Python orchestration döngüsünde yürür.
 ```
 
-Diğer çalışma biçimleri aynı model, araçlar ve worker'lar üzerinde farklı
-yönlendirme yollarını karşılaştırmak içindir. `Supervisor` adımları planlamadan
-anlık delege eder; `Router` basit görevleri tek worker'a gönderir; `Tek agent`
-uzmanlar arasında delege etmez; `LangGraph` benzer supervisor akışını bir grafik
-motorunda yürütür. Arayüzde bunlar gelişmiş seçenekler altında bulunur.
+Otomatik seçim ile agent seçimi farklı kararlardır. `AutoModeRouter` isteğin
+genel olarak hangi çalışma moduna gideceğini seçer. Supervisor modu seçildiyse
+Supervisor LLM işi hangi uzmanın yapacağına karar verir. `Router` adlı ayrı mod
+tek ve bağımsız işler için worker seçer; belirsiz veya çok adımlı işleri
+supervisor'a bırakır. `Supervisor` modu doğrudan delege eder, `Plan` modu önce
+bağımlılıkları olan bir görev listesi üretir, `Tek agent` uzmanlara delege etmez.
+`LangGraph` yalnızca `graph` modu seçildiğinde devreye girer; varsayılan
+Otomatik/Supervisor orkestratörü değildir.
 
 İlk satış demosu `data_agent → writer → reviewer` zinciriyle gerçek yerel modelde
 çalıştırıldı. Reviewer rapor sayılarını kaynak CSV'den yeniden hesaplar. Kod
@@ -80,10 +97,11 @@ Tool kullanan tek agent için:
 .venv\Scripts\python.exe -m app.main --agent --graph --trace --show-tools --prompt "3+44 işlemini hesapla"
 ```
 
-`--show-tools`, çağrılan araçların yalnızca adlarını gösterir. `--allow-python`
-eklenirse kısıtlı Python aracı açılır. Bu araç ayrı subprocess, süre sınırı,
-çıktı sınırı ve izinli sözdizimi kullanır; genel amaçlı güvenli bir işletim
-sistemi sandbox'ı değildir. Varsayılan agent izinlerinde kapalıdır.
+`--show-tools`, çağrılan araçların yalnızca adlarını gösterir. CLI agent modunda
+`--allow-python` kısıtlı Python aracını registry'ye ekler ve `general`/`coder`
+rollerine açar. Web arayüzünün `AgentRuntime` yolu şu anda bu aracı registry'ye
+eklemez. Tool ayrı subprocess, süre ve çıktı sınırı ile izinli sözdizimi
+kullanır; genel amaçlı işletim sistemi sandbox'ı değildir.
 Etkileşimli agent modunda bir görev hata verirse hata yazdırılır ve yeni `Görev>`
 girdisi beklenir. `--prompt` ile tek görev çalıştırıldığında hata çıkış kodu 1'dir.
 
@@ -119,11 +137,13 @@ dosyasıyla test edilir.
 llama.cpp JSON şemasıyla ister. Bu, modelin `{}` gibi geçersiz kararlar
 üretmesini sınırlar. Araç kararı her aracın gerçek argüman şemasıyla kısıtlanır;
 böylece yerel model serbest JSON alanlarını sonsuza dek üretmez. Pydantic
-geçersiz yanıtı reddeder; en fazla iki kez
-yeniden deneme yapılır. `ToolRegistry`, aracı yalnızca çağıranın açık izin
-listesindeyse gösterir ve çalıştırır. Mevcut araçlar: `calculator`, `file_read`,
-`file_write`, `directory_list`, `csv_summary`, `function_test`, `search`, API
-çalışmasında `wikipedia_lookup` ve isteğe bağlı `python_exec`.
+geçersiz yanıtı reddeder; sınırlı sayıda yeniden deneme yapılır. `ToolRegistry`,
+aracı yalnızca çağıranın açık izin listesindeyse gösterir ve çalıştırır.
+Runtime'ın her zaman kaydettiği araçlar: `calculator`, `csv_summary`,
+`function_test`, `file_read`, `file_write`, `directory_list` ve yerel workspace
+araması yapan `search`. `AGENT_WEB_LOOKUP_ENABLED` açıkken `wikipedia_lookup`
+ve `web_search` eklenir. CLI'da `--allow-python` verilirse ayrıca `python_exec`
+kaydedilir; web arayüzündeki runtime yolunda `python_exec` kayıtlı değildir.
 
 Dosya araçları sadece `workspace/` altında çalışır. `file_write` mevcut dosyayı
 ancak `overwrite=true` verilirse değiştirir. Araç yolları `note.txt` veya
@@ -144,8 +164,9 @@ ve API'de kamuya açık Wikipedia sorgularını;
 `coder` workspace içi Python kodunu ve sınırlı fonksiyon testlerini; `file_agent`
 dosya yönetimini; `data_agent` CSV analizini; `writer` Markdown raporunu üstlenir.
 Hepsi aynı GGUF model örneğini kullanır, fakat prompt ve araç izinleri ayrıdır.
-`researcher` yazamaz; `file_agent` kod çalıştıramaz. `python_exec` sadece
-`--allow-python` ile `general` ve `coder` rollerine açılır.
+`researcher` yazamaz; `file_agent` kod çalıştıramaz. CLI'da `python_exec`
+yalnızca `--allow-python` verilince `general` ve `coder` rollerine açılır.
+Web arayüzünün runtime'ı bu aracı şu anda kaydetmez.
 
 `search` aracı yalnızca `workspace/` altındaki UTF-8 metinlerde arama yapar.
 API'nin Otomatik modunda kamuya açık konu ve kişi soruları için
