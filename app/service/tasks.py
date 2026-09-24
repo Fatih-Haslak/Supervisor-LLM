@@ -37,6 +37,7 @@ class TaskView(BaseModel):
     status: TaskStatus
     answer: str | None = None
     error: ErrorInfo | None = None
+    current_agent: str | None = None
     events: list[TraceEvent] = Field(default_factory=list)
     tool_calls: list[ToolCallRecord] = Field(default_factory=list)
     agent_outputs: list[AgentOutput] = Field(default_factory=list)
@@ -65,7 +66,10 @@ class TaskRecord:
             message=self.message, mode=self.mode,
             status=self.status,
             answer=state.final_answer if state is not None else None,
-            error=self.error, events=list(self.recorder.events),
+            error=self.error,
+            current_agent=(state.current_agent if state is not None
+                           else self.recorder.current_agent),
+            events=list(self.recorder.events),
             tool_calls=list(state.tool_results) if state is not None else [],
             agent_outputs=list(state.agent_outputs) if state is not None else [],
             reviews=list(state.reviews) if state is not None else [],

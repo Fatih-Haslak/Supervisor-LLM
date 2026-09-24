@@ -82,3 +82,22 @@ def test_trace_event_count_is_bounded() -> None:
         recorder.record("task_started")
     assert len(recorder.events) == 2
     assert recorder.dropped == 2
+
+
+def test_trace_recorder_tracks_current_nested_agent() -> None:
+    recorder = TraceRecorder()
+    recorder.record("agent_enter", agent="supervisor")
+    recorder.record("agent_enter", agent="reviewer")
+    assert recorder.current_agent == "reviewer"
+
+    recorder.record("agent_exit", agent="reviewer")
+    assert recorder.current_agent == "supervisor"
+    recorder.record("agent_exit", agent="supervisor")
+    assert recorder.current_agent is None
+
+
+def test_context_fallback_is_a_valid_trace_event() -> None:
+    recorder = TraceRecorder()
+    recorder.record("context_fallback", agent="researcher")
+
+    assert recorder.events[0].event == "context_fallback"

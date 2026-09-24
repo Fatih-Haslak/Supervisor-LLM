@@ -764,5 +764,8 @@ class Supervisor:
             completed_ids.add(planned_task.id)
             index += 1
         state.step_count += 1
-        state.finish(await self._synthesize(state))
+        state.current_agent = "supervisor"
+        with agent_span("supervisor"):
+            answer = await self._synthesize(state)
+        state.finish(answer)
         return state

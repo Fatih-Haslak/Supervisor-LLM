@@ -55,14 +55,20 @@ function unique(values) {
   return [...new Set(values.filter(Boolean))];
 }
 
-function latestEvent(view, names) {
-  return [...view.events].reverse().find((event) => names.includes(event.event));
+function agentIsActive(view, agent) {
+  return view.status === "running" && currentAgent(view) === agent;
 }
 
-function agentIsActive(view, agent) {
-  const events = view.events.filter((event) => event.agent === agent);
-  const last = events.at(-1);
-  return last?.event === "agent_enter" && view.status === "running";
+function currentAgent(view) {
+  const stack = [];
+  for (const event of view.events) {
+    if (event.event === "agent_enter" && event.agent) stack.push(event.agent);
+    if (event.event === "agent_exit" && event.agent) {
+      const index = stack.lastIndexOf(event.agent);
+      if (index >= 0) stack.splice(index, 1);
+    }
+  }
+  return stack.at(-1) || null;
 }
 
 function makeFlowNode(id, parents, level, label, detail, state, explanation) {
@@ -80,12 +86,14 @@ function makeFlowCard(node) {
   const icon = document.createElement("span");
   icon.className = "flow-card-icon";
   icon.setAttribute("aria-hidden", "true");
-  icon.textContent = node.state === "done" ? "✓" : node.state === "failed" ? "!" : "·";
+  icon.textContent = node.state === "done" ? "✓" : node.state === "failed" ? "!"
+    : node.id === "answer" && node.state === "active" ? "" : "·";
   const title = document.createElement("strong");
   title.textContent = node.label;
   const state = document.createElement("small");
   state.className = "flow-card-state";
-  state.textContent = stateLabels[node.state] || "Sırada";
+  state.textContent = node.id === "answer" && node.state === "active"
+    ? "Yanıt hazırlanıyor…" : stateLabels[node.state] || "Sırada";
   const detail = document.createElement("span");
   detail.className = "flow-card-detail";
   detail.textContent = node.detail;
@@ -116,6 +124,25 @@ function renderTreeEdges(canvas, nodes, positions, width, height) {
   svg.classList.add("flow-tree-edges");
   svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
   svg.setAttribute("aria-hidden", "true");
+  const defs = document.createElementNS(svgNs, "defs");
+  for (const [state, color] of Object.entries({
+    waiting: "#91a9b1", done: "#27865f", active: "#087f91", failed: "#b94d4d", approval: "#bd7e13"
+  })) {
+    const marker = document.createElementNS(svgNs, "marker");
+    marker.setAttribute("id", `flow-arrow-${state}`);
+    marker.setAttribute("viewBox", "0 0 10 10");
+    marker.setAttribute("refX", "10");
+    marker.setAttribute("refY", "5");
+    marker.setAttribute("markerWidth", "9");
+    marker.setAttribute("markerHeight", "9");
+    marker.setAttribute("orient", "auto");
+    const tip = document.createElementNS(svgNs, "path");
+    tip.setAttribute("d", "M 0 0 L 10 5 L 0 10 z");
+    tip.setAttribute("fill", color);
+    marker.append(tip);
+    defs.append(marker);
+  }
+  svg.append(defs);
   for (const node of nodes) {
     const child = positions.get(node.id);
     if (!child) continue;
@@ -129,7 +156,9 @@ function renderTreeEdges(canvas, nodes, positions, width, height) {
       path.setAttribute("d", `M ${parent.x} ${startY} C ${parent.x} ${startY + curve}, ${child.x} ${endY - curve}, ${child.x} ${endY}`);
       path.dataset.state = node.state === "active" ? "active"
         : node.state === "failed" ? "failed"
-        : node.state === "done" && ["done", "skipped"].includes(parent.state) ? "done" : "waiting";
+        : node.state === "approval" ? "approval"
+          : node.state === "done" && ["done", "skipped"].includes(parent.state) ? "done" : "waiting";
+      path.setAttribute("marker-end", `url(#flow-arrow-${path.dataset.state})`);
       svg.append(path);
     }
   }
@@ -141,6 +170,7 @@ function renderFlowGraph(view) {
   const finished = view.status === "completed";
   const running = view.status === "running" || view.status === "waiting_approval";
   const managerNames = ["supervisor", "router", "planner", "mode_router"];
+  const activeAgent = view.current_agent || currentAgent(view);
   const systemAgents = new Set([...managerNames, "reviewer"]);
   const managerEvents = view.events.filter((event) => managerNames.includes(event.agent)
     || ["route_selected", "mode_selected", "plan_fallback"].includes(event.event));
@@ -150,11 +180,11 @@ function renderFlowGraph(view) {
   const lastRecovery = [...view.events].reverse().find((event) => event.event === "supervisor_fallback");
   const managerFailed = Boolean(lastManagerError
     && (!lastRecovery || lastRecovery.sequence < lastManagerError.sequence));
-  const managerActive = managerNames.some((agent) => agentIsActive(view, agent));
+  const managerActive = managerNames.includes(activeAgent) && view.status === "running";
   const selectedMode = [...view.events].reverse().find((event) => event.event === "mode_selected")?.mode;
   const managerLabel = managerEvents.some((event) => ["supervisor", "planner"].includes(event.agent))
     ? "Supervisor / planlayıcı" : "Mod yönlendiricisi";
-  const managerDetail = view.route
+  let managerDetail = view.route
     ? `${agentLabels[view.route.selected_agent] || view.route.selected_agent} seçildi`
     : modeLabels[selectedMode] || modeLabels[view.mode] || view.mode;
   const managerState = managerFailed ? "failed" : managerActive ? "active"
@@ -195,8 +225,8 @@ function renderFlowGraph(view) {
   const reviewSpecs = view.reviews.length ? view.reviews : reviewEvents.map((event, index) => ({
     agent: "reviewer", attempt: index + 1, status: event.success === false ? "fail" : "pass", task: "Sonucu kontrol etti", issues: []
   }));
-  if (!reviewSpecs.length && agentIsActive(view, "reviewer")) {
-    reviewSpecs.push({ agent: "reviewer", attempt: 1, status: "active", task: "Çıktıyı inceliyor", issues: [] });
+  if (agentIsActive(view, "reviewer")) {
+    reviewSpecs.push({ agent: "reviewer", attempt: reviewSpecs.length + 1, status: "active", task: "Çıktıyı inceliyor", issues: [] });
   }
   const reviews = reviewSpecs.map((review, index) => ({
     id: `review-${index}`, label: `Reviewer · ${review.attempt}. kontrol`,
@@ -205,7 +235,16 @@ function renderFlowGraph(view) {
       : review.status === "pass" ? "Kontrolden geçti" : "Düzeltme istedi",
     explanation: review.issues?.length ? `Kontrol notu: ${review.issues.join("; ")}` : "Reviewer, agent çıktısını ve varsa araç kanıtlarını kontrol eder."
   }));
-  const answerState = finished ? "done" : failed ? "failed" : "waiting";
+  const hasWorkOutput = view.agent_outputs.length > 0 || view.tool_calls.length > 0
+    || eventTools.length > 0 || view.reviews.length > 0 || reviewEvents.length > 0
+    || view.events.some((event) => event.event === "agent_exit"
+      && event.agent && !systemAgents.has(event.agent));
+  // Final synthesis runs outside an agent span, so an empty active-agent stack
+  // after worker output is the expected answer-generation phase.
+  const answerIsActive = running && hasWorkOutput && !view.pending_approval
+    && (managerActive || !activeAgent);
+  if (answerIsActive && managerActive) managerDetail = "Son yanıtı toparlıyor";
+  const answerState = finished ? "done" : failed ? "failed" : answerIsActive ? "active" : "waiting";
   const nodes = [];
   const request = makeFlowNode("request", null, 0, "Senin isteğin",
     view.message.length > 72 ? `${view.message.slice(0, 72)}…` : view.message,
@@ -240,13 +279,14 @@ function renderFlowGraph(view) {
   }
   if (!reviews.length) {
     nodes.push(makeFlowNode("review-skipped", branchLeaves, 3, "Reviewer",
-      finished ? "İnceleme gerekmedi" : "İnceleme bekleniyor",
-      finished ? "skipped" : "waiting",
+      finished || answerIsActive ? "İnceleme gerekmedi" : "İnceleme bekleniyor",
+      finished || answerIsActive ? "skipped" : "waiting",
       "Kod veya araştırma gibi görevlerde reviewer çıktıyı doğrulayabilir."));
   }
   nodes.push(makeFlowNode("answer", reviews.length ? reviews.at(-1).id : "review-skipped", 4,
     finished ? "Yanıt hazır" : failed ? "Görev durdu" : "Yanıt hazırlanıyor",
-    finished ? "Sonuç sohbete eklendi" : failed ? view.error?.code || "Görev tamamlanamadı" : "Önceki adımlar bekleniyor",
+    finished ? "Sonuç sohbete eklendi" : failed ? view.error?.code || "Görev tamamlanamadı"
+      : answerIsActive ? "Supervisor son yanıtı hazırlıyor" : "Önceki adımlar bekleniyor",
     answerState, "Supervisor agent ve araç sonuçlarını birleştirip son yanıtı konuşmaya ekler."));
 
   const viewportWidth = Math.max(flowGraph.clientWidth, 760);
@@ -284,32 +324,25 @@ function renderFlowGraph(view) {
   viewport.append(canvas);
   flowGraph.append(viewport);
   const currentSelection = nodes.find((node) => node.id === selectedFlowNode)
+    || nodes.find((node) => node.id === "answer" && node.state === "active")
     || nodes.find((node) => node.state === "active") || nodes.at(-1);
-  if (currentSelection && selectedFlowNode) showFlowNode(currentSelection);
+  if (currentSelection) showFlowNode(currentSelection);
 
-  const last = latestEvent(view, [
-    "task_failed", "task_completed", "approval_requested", "review_verdict",
-    "tool_call", "supervisor_fallback", "agent_enter", "route_selected", "mode_selected", "task_started"
-  ]);
-  const activeLabel = last?.agent ? agentLabels[last.agent] || last.agent : null;
-  const activeTool = last?.tool ? toolLabels[last.tool] || last.tool : null;
-  const summaries = {
-    task_started: "İstek alındı; görev yolu belirleniyor.",
-    route_selected: `${activeLabel || "Uzman agent"} seçildi.`,
-    mode_selected: `${modeLabels[last?.mode] || "Çalışma biçimi"} seçildi.`,
-    agent_enter: `${activeLabel || "Agent"} şu anda çalışıyor.`,
-    tool_call: `${activeTool || "Araç"} çalıştı.`,
-    review_verdict: "Reviewer sonucu kontrol etti.",
-    supervisor_fallback: "Supervisor son biçimi üretemedi; tamamlanan agent çıktısı kullanıldı.",
-    approval_requested: "Dosya işlemi için onayın bekleniyor.",
-    task_completed: "Akış tamamlandı; yanıt sohbete eklendi.",
-    task_failed: `Akış ${view.error?.code || "bir hata"} nedeniyle durdu.`
-  };
-  flowSummary.textContent = failed ? summaries.task_failed
-    : finished ? summaries.task_completed
-      : view.status === "waiting_approval" ? summaries.approval_requested
-        : summaries[last?.event] || (view.status === "queued"
-          ? "Görev sıraya alındı." : "Görev akışı hazırlanıyor.");
+  const runningStage = answerIsActive ? "Yanıt hazırlanıyor"
+    : activeAgent === "reviewer" ? "Reviewer sonucu kontrol ediyor"
+      : managerActive ? "Supervisor işi yönlendiriyor"
+        : activeAgent ? `${agentLabels[activeAgent] || activeAgent} çalışıyor`
+          : view.status === "queued" ? "Görev sırada bekliyor" : "Görev akışı başlatılıyor";
+  const completedCount = nodes.filter((node) => node.state === "done").length;
+  const activeDetail = answerIsActive ? "Son yanıt hazırlanıyor; önceki görev adımları tamamlandı."
+    : activeAgent === "reviewer" ? "Çalışan kart ve turkuaz ok, şu an kontrol edilen adımı gösteriyor."
+      : activeAgent && !managerNames.includes(activeAgent)
+        ? `${agentLabels[activeAgent] || activeAgent} görevi yürütüyor; turkuaz ok bu adıma gider.`
+        : "Turkuaz oklar şu an izlenen yolu, yeşil oklar tamamlanan adımları gösterir.";
+  flowSummary.textContent = failed ? `Durdu: ${view.error?.code || "görev hatası"}. Hata veren adım kırmızı.`
+    : finished ? "Tamamlandı: Son yanıt sohbete eklendi."
+      : view.status === "waiting_approval" ? "Onay bekliyor: Dosya işlemi için yanıtın gerekiyor."
+        : `Şu an: ${runningStage}. ${activeDetail} (${completedCount} adım tamamlandı).`;
   flowGraph.setAttribute("aria-label", `Agent görev akışı. ${flowSummary.textContent}`);
 }
 
@@ -417,7 +450,8 @@ const eventLabels = {
   review_verdict: "Reviewer karar verdi", route_selected: "Agent seçildi",
   mode_selected: "Çalışma biçimi seçildi",
   approval_requested: "Onay istendi", approval_resolved: "Onay yanıtlandı",
-  supervisor_fallback: "Agent çıktısından yedek yanıt oluşturuldu"
+  supervisor_fallback: "Agent çıktısından yedek yanıt oluşturuldu",
+  context_fallback: "Bağlam sınırı için uygun uzman seçildi"
 };
 
 function showError(message) {

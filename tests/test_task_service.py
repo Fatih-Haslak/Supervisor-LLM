@@ -5,7 +5,7 @@ import pytest
 from app.llm.schemas import ChatMessage
 from app.orchestration.state import AgentState, ReviewRecord
 from app.security.approvals import ApprovalRequest, Approver, ToolApprovalError
-from app.service.tasks import TaskManager, TaskMode
+from app.service.tasks import TaskManager, TaskMode, TaskRecord
 
 
 async def wait_status(manager: TaskManager, task_id: str, status: str) -> None:
@@ -15,6 +15,14 @@ async def wait_status(manager: TaskManager, task_id: str, status: str) -> None:
             return
         await asyncio.sleep(0.01)
     raise AssertionError(f"Task never reached {status}")
+
+
+def test_task_view_exposes_current_agent_during_live_work() -> None:
+    task = TaskRecord(message="araştır", mode="supervisor", conversation_id="local")
+    task.status = "running"
+    task.recorder.record("agent_enter", agent="supervisor")
+
+    assert task.view().current_agent == "supervisor"
 
 
 @pytest.mark.asyncio

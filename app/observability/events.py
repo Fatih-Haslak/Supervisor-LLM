@@ -17,6 +17,7 @@ EventName = Literal[
     "model_call", "model_error", "model_retry", "plan_fallback", "tool_call",
     "review_verdict", "route_selected", "mode_selected",
     "approval_requested", "approval_resolved", "supervisor_fallback",
+    "context_fallback",
 ]
 _active: ContextVar["TraceRecorder | None"] = ContextVar("active_trace", default=None)
 _safe_name = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,39}$")
@@ -58,6 +59,11 @@ class TraceRecorder:
         self.max_events = max_events
         self.events: list[TraceEvent] = []
         self.dropped = 0
+        self._agent_stack: list[str] = []
+
+    @property
+    def current_agent(self) -> str | None:
+        return self._agent_stack[-1] if self._agent_stack else None
 
     def record(
         self, event: EventName, *, agent: str | None = None,
@@ -68,6 +74,14 @@ class TraceRecorder:
         prompt_tokens: int | None = None, completion_tokens: int | None = None,
         retry_count: int | None = None, error_type: str | None = None,
     ) -> None:
+        if event == "agent_enter" and agent:
+            self._agent_stack.append(_name(agent) or "unknown")
+        elif event == "agent_exit" and agent:
+            normalized = _name(agent)
+            index = next((i for i in range(len(self._agent_stack) - 1, -1, -1)
+                          if self._agent_stack[i] == normalized), -1)
+            if index >= 0:
+                self._agent_stack.pop(index)
         if len(self.events) >= self.max_events:
             self.dropped += 1
             return
