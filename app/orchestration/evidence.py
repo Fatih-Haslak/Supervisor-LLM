@@ -11,10 +11,17 @@ _FALSE_ABSENCE = re.compile(
     r"(?:bilgi veremem|bilgi sağlayamıyorum|doğrulayamadım)",
     flags=re.IGNORECASE,
 )
+_SAFE_RESEARCH_ABSTENTION = re.compile(
+    r"(?:güvenilir bir kaynak bulamadım|araştırma sonuçlarını güvenilir biçimde "
+    r"doğrulayamadım)",
+    flags=re.IGNORECASE,
+)
 
 
 def ground_wikipedia_answer(answer: str, results: Sequence[ToolResult]) -> str:
     """Recover from a false no-article answer and require a visible source URL."""
+    if _SAFE_RESEARCH_ABSTENTION.search(answer):
+        return answer
     for result in reversed(results):
         if not result.success or result.output is None:
             continue

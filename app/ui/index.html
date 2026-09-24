@@ -56,14 +56,21 @@
           </section>
           <details class="memory-panel" id="memory-panel">
             <summary>Kalıcı bellek</summary>
-            <p>Buraya eklediğin bilgiler sonraki sohbetlerde kullanılır. Kayıtlar yerel SQLite dosyasında saklanır; parola veya anahtar ekleme.</p>
+            <p>Buraya eklediğin bilgiler sonraki sohbetlerde kullanılır ve bu bilgisayarda saklanır. Adını kaydetmek için: <strong>Anahtar: name</strong>, <strong>Hatırlanacak bilgi: Fatih Haşlak</strong>, <strong>Tür: Bilgi</strong>. Parola veya gizli anahtar ekleme.</p>
             <form id="memory-form" class="memory-form">
-              <label for="memory-key">Anahtar (ör. response_language)</label>
-              <input id="memory-key" name="key" maxlength="64" pattern="[a-z][a-z0-9_.-]{1,63}" required>
-              <label for="memory-value">Hatırlanacak bilgi</label>
-              <input id="memory-value" name="value" maxlength="500" required>
-              <label for="memory-category">Tür</label>
-              <select id="memory-category" name="category"><option value="preference">Tercih</option><option value="decision">Proje kararı</option><option value="fact">Bilgi</option></select>
+              <div class="memory-field">
+                <label for="memory-key">Anahtar · kısa kayıt adı</label>
+                <input id="memory-key" name="key" value="name" maxlength="64" pattern="[a-z][a-z0-9_.-]{1,63}" aria-describedby="memory-key-help" required>
+                <small id="memory-key-help">Adın için “name” olarak bırak.</small>
+              </div>
+              <div class="memory-field">
+                <label for="memory-value">Hatırlanacak bilgi</label>
+                <input id="memory-value" name="value" maxlength="500" placeholder="Örn. Fatih Haşlak" required>
+              </div>
+              <div class="memory-field">
+                <label for="memory-category">Tür</label>
+                <select id="memory-category" name="category"><option value="fact" selected>Bilgi</option><option value="preference">Tercih</option><option value="decision">Proje kararı</option></select>
+              </div>
               <button type="submit">Belleğe kaydet</button>
             </form>
             <p id="memory-error" class="error" role="alert" hidden></p>

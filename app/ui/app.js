@@ -377,7 +377,9 @@ memoryForm.addEventListener("submit", async (event) => {
   const payload = Object.fromEntries(new FormData(memoryForm));
   try {
     const response = await fetch("/memories", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
-    if (!response.ok) throw new Error(response.status === 422 ? "Anahtarı ve bilgiyi kontrol et. Gizli bilgi belleğe kaydedilmez." : "Bellek kaydedilemedi.");
+    if (!response.ok) throw new Error(response.status === 422
+      ? "Anahtar küçük harfle başlamalı (ör. name); hatırlanacak bilgi boş olmamalı. Parola veya gizli anahtar kaydedilemez."
+      : "Bellek kaydedilemedi.");
     memoryForm.reset();
     await loadMemories();
   } catch (error) { memoryError.textContent = error.message; memoryError.hidden = false; }

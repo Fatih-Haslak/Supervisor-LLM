@@ -35,6 +35,23 @@ def test_successful_wikipedia_lookup_adds_missing_citation() -> None:
     assert state.final_answer.endswith("https://tr.wikipedia.org/wiki/Muhammed_Salah")
 
 
+def test_wikipedia_grounding_preserves_safe_research_abstention() -> None:
+    state = AgentState(user_request="Muhammed Salah kimdir?")
+    state.tool_results.append(ToolCallRecord(
+        tool="wikipedia_lookup", arguments={"title": "Muhammed Salah"},
+        result=ToolResult.ok(json.dumps({
+            "title": "Muhammed Salah", "extract": "Mısırlı futbolcudur.",
+            "url": "https://tr.wikipedia.org/wiki/Muhammed_Salah",
+        })),
+    ))
+    answer = (
+        "Araştırma sonuçlarını güvenilir biçimde doğrulayamadım; "
+        "doğrulanmamış ayrıntı vermiyorum."
+    )
+    state.finish(answer)
+    assert state.final_answer == answer
+
+
 def test_english_source_keeps_original_intro_when_model_changes_nationality() -> None:
     state = AgentState(user_request="Mo Salah (footballer, born 2004) kimdir?")
     state.tool_results.append(ToolCallRecord(

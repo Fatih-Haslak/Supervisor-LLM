@@ -422,17 +422,29 @@ class SingleAgent:
                     if retry_result.success and retry_result.output != "[]":
                         result = retry_result
             if (self._role_name == "researcher" and decision.tool == "wikipedia_lookup"
-                    and result.error_type == "NoArticle"):
+                    and result.error_type in {
+                        "NoArticle", "LookupUnavailable", "InvalidArguments",
+                    }):
+                available_tools = {
+                    spec.name for spec in self._registry.specs(self._allowed_tools)
+                }
+                title = arguments.get("title") or _public_title_from_request(user_request)
+                if ("web_search" in available_tools and isinstance(title, str)
+                        and len(state.tool_results) < self._max_tool_calls):
+                    fallback_arguments = {"query": title[:300]}
+                    fallback_result = await self._registry.execute(
+                        "web_search", fallback_arguments, self._allowed_tools
+                    )
+                    state.tool_results.append(ToolCallRecord(
+                        tool="web_search", arguments=fallback_arguments,
+                        result=fallback_result,
+                    ))
+                    if fallback_result.success and fallback_result.output:
+                        state.finish(_web_search_fallback(fallback_result.output))
+                        return AgentRunResult(state=state)
                 state.finish(
-                    "Bu başlıkla eşleşen doğrulanmış bir Wikipedia maddesi bulamadım. "
-                    "Kişi veya konu adını farklı bir yazımla deneyebilirsiniz."
-                )
-                return AgentRunResult(state=state)
-            if (self._role_name == "researcher" and decision.tool == "wikipedia_lookup"
-                    and result.error_type == "LookupUnavailable"):
-                state.finish(
-                    "Bu konuda Wikipedia kaynağına erişip bilgiyi doğrulayamadım. "
-                    "Doğrulanmamış kişi veya güncel görev bilgisi vermiyorum."
+                    "Bu konuda güvenilir bir kaynak bulamadım; doğrulanmış bilgi veremiyorum. "
+                    "İstersen adı farklı yazımlarla veya ek ipuçlarıyla yeniden araştırabilirim."
                 )
                 return AgentRunResult(state=state)
             if decision.tool == "wikipedia_lookup" and result.error_type == "InvalidArguments":

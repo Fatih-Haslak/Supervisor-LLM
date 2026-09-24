@@ -5,8 +5,13 @@ from typing import Any
 
 import pytest
 
-from app.agents.reviewer import ReviewerAgent
+from app.agents.reviewer import (
+    NO_SOURCE_RESEARCH_ANSWER,
+    RESEARCH_UNVERIFIED_ANSWER,
+    ReviewerAgent,
+)
 from app.agents.supervisor import Supervisor, WorkerResult
+from app.llm.client import LLMContextOverflowError
 from app.llm.schemas import ChatMessage, LLMResponse
 from app.orchestration.state import AgentState, ToolCallRecord
 from app.tools.base import ToolResult
@@ -116,6 +121,20 @@ async def test_reviewer_requires_file_evidence(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_reviewer_accepts_explicit_no_source_fallback(tmp_path: Path) -> None:
+    root = tmp_path / "workspace"
+    root.mkdir()
+    llm = ScriptedLLM([])
+    result = await ReviewerAgent(llm, make_registry(root)).review(
+        "Cihan Top kimdir?", "Kişiyi araştır",
+        WorkerResult(answer=NO_SOURCE_RESEARCH_ANSWER),
+    )
+    assert result.verdict.status == "pass"
+    assert result.tool_calls == []
+    assert llm.calls == 0
+
+
+@pytest.mark.asyncio
 async def test_reviewer_accepts_successful_wikipedia_source(tmp_path: Path) -> None:
     root = tmp_path / "workspace"
     root.mkdir()
@@ -160,6 +179,92 @@ async def test_reviewer_accepts_web_search_snippet_as_public_evidence(tmp_path: 
     evidence = json.loads(llm.requests[0][-1].content)
     assert evidence["public_sources"][0]["extract"].startswith("A platform")
     assert evidence["public_sources"][0]["url"] == "https://developer.nvidia.com/triton"
+
+
+@pytest.mark.asyncio
+async def test_no_public_research_results_complete_with_safe_fallback(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "workspace"
+    root.mkdir()
+    registry = make_registry(root)
+
+    class NoSourceResearcher:
+        async def run(self, _task: str, _state: AgentState) -> WorkerResult:
+            return WorkerResult(
+                answer="Cihan Top tanınmış bir Türk oyuncudur.",
+                tool_results=[
+                    ToolCallRecord(
+                        tool="wikipedia_lookup", arguments={"title": "Cihan Top"},
+                        result=ToolResult.fail("NoArticle", "Madde bulunamadı"),
+                    ),
+                    ToolCallRecord(
+                        tool="web_search", arguments={"query": "Cihan Top"},
+                        result=ToolResult.fail("NoResults", "Sonuç bulunamadı"),
+                    ),
+                ],
+            )
+
+    llm = ScriptedLLM([
+        '{"action":"delegate","next_agent":"researcher","task":"Araştır",'
+        '"reason":"Kişi araştırması"}',
+        '{"action":"final_answer","answer":"'
+        + NO_SOURCE_RESEARCH_ANSWER + '"}',
+    ])
+    state = await Supervisor(
+        llm, {"researcher": NoSourceResearcher()},
+        reviewer=ReviewerAgent(llm, registry),
+    ).run("Cihan Top kimdir?")
+
+    assert state.final_answer == NO_SOURCE_RESEARCH_ANSWER
+    assert state.completed_tasks
+    assert state.pending_tasks == []
+    assert [review.status for review in state.reviews] == ["pass"]
+    assert state.agent_outputs[-1].answer == NO_SOURCE_RESEARCH_ANSWER
+
+
+@pytest.mark.asyncio
+async def test_reviewer_context_overflow_returns_safe_research_answer(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "workspace"
+    root.mkdir()
+    registry = make_registry(root)
+    source = ToolCallRecord(
+        tool="wikipedia_lookup", arguments={"title": "Cihan Top"},
+        result=ToolResult.ok(
+            '{"title":"Cihan Top","extract":"Kişi hakkında kısa bilgi.",'
+            '"url":"https://tr.wikipedia.org/wiki/Cihan_Top"}'
+        ),
+    )
+
+    class ResearchWorker:
+        async def run(self, _task: str, _state: AgentState) -> WorkerResult:
+            return WorkerResult(
+                answer="Cihan Top hakkında doğrulanamayan ayrıntılar.",
+                tool_results=[source],
+            )
+
+    class OverflowDuringReviewLLM(ScriptedLLM):
+        async def chat(self, messages: Sequence[ChatMessage], **kwargs: Any) -> LLMResponse:
+            if len(self.requests) == 1:
+                self.requests.append(list(messages))
+                raise LLMContextOverflowError("prompt exceeds context window")
+            return await super().chat(messages, **kwargs)
+
+    llm = OverflowDuringReviewLLM([
+        '{"action":"delegate","next_agent":"researcher","task":"Araştır",'
+        '"reason":"Kişi araştırması"}',
+        '{"action":"final_answer","answer":"' + RESEARCH_UNVERIFIED_ANSWER + '"}',
+    ])
+    state = await Supervisor(
+        llm, {"researcher": ResearchWorker()},
+        reviewer=ReviewerAgent(llm, registry),
+    ).run("Cihan Top kimdir?")
+
+    assert state.final_answer == RESEARCH_UNVERIFIED_ANSWER
+    assert state.completed_tasks and state.pending_tasks == []
+    assert [review.status for review in state.reviews] == ["pass"]
 
 
 @pytest.mark.asyncio

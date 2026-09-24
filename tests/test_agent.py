@@ -320,8 +320,37 @@ async def test_public_lookup_extracts_topic_from_research_assignment() -> None:
     ).run(request)
     assert result.tool_calls[0].arguments == {"title": "Triton Server"}
     assert result.tool_calls[0].result.error_type == "NoArticle"
-    assert "doğrulanmış bir Wikipedia maddesi bulamadım" in result.answer
+    assert "güvenilir bir kaynak bulamadım" in result.answer
     assert len(result.tool_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_researcher_falls_back_to_web_when_wikipedia_has_no_article() -> None:
+    registry = ToolRegistry()
+    registry.register(WikipediaLookupTool(lambda title: {
+        "query": {"pages": [{"missing": True, "title": title}]}
+    }))
+    registry.register(WebSearchTool(search=lambda query: {
+        "provider": "test", "query": query, "results": [{
+            "title": "Cihan Top profile", "url": "https://example.org/cihan-top",
+            "snippet": "Cihan Top için doğrulanabilir kısa tanıtım.",
+        }],
+    }))
+    llm = ScriptedLLM([
+        '{"action":"use_tool","tool":"wikipedia_lookup",'
+        '"arguments":{"title":"Cihan Top"}}',
+    ])
+    result = await SingleAgent(
+        llm, registry, {"wikipedia_lookup", "web_search"}, role_name="researcher"
+    ).run("Cihan Top kimdir?")
+
+    assert [call.tool for call in result.tool_calls] == [
+        "wikipedia_lookup", "web_search",
+    ]
+    assert result.tool_calls[0].result.error_type == "NoArticle"
+    assert result.tool_calls[1].arguments == {"query": "Cihan Top"}
+    assert "Cihan Top profile" in result.answer
+    assert "https://example.org/cihan-top" in result.answer
 
 
 @pytest.mark.asyncio
@@ -374,6 +403,6 @@ async def test_unavailable_public_source_returns_uncertainty_without_retry() -> 
     result = await SingleAgent(
         llm, registry, {"wikipedia_lookup"}, role_name="researcher"
     ).run("Fatih Tekke kimdir?")
-    assert "doğrulayamadım" in result.answer
+    assert "güvenilir bir kaynak bulamadım" in result.answer
     assert len(result.tool_calls) == 1
     assert result.tool_calls[0].result.error_type == "LookupUnavailable"

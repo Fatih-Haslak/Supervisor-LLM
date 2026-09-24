@@ -76,7 +76,9 @@ class AgentRuntime:
             )
             if chosen == "chat":
                 with agent_span("chat"):
-                    return await run_chat(strategy.for_role("chat"), message, history)
+                    return await run_chat(
+                        strategy.for_role("chat"), message, history, self._memories
+                    )
             mode = chosen
         if mode == "single":
             with agent_span("single"):

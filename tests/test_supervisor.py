@@ -4,12 +4,14 @@ from typing import Any
 
 import pytest
 
-from app.agents.reviewer import ReviewVerdict
+from app.agents.reviewer import NO_SOURCE_RESEARCH_ANSWER, ReviewVerdict
 from app.agents.supervisor import Supervisor, SupervisorLimitError, WorkerResult
+from app.llm.client import LLMContextOverflowError
 from app.llm.schemas import ChatMessage, LLMResponse
 from app.llm.structured import StructuredOutputError
 from app.observability.events import TraceRecorder, trace_session
-from app.orchestration.state import AgentState
+from app.orchestration.state import AgentState, ToolCallRecord
+from app.tools.base import ToolResult
 
 
 class ScriptedLLM:
@@ -105,13 +107,120 @@ async def test_supervisor_routes_public_research_to_researcher_and_limits_assign
 
 
 @pytest.mark.asyncio
+async def test_supervisor_routes_research_when_initial_decision_overflows() -> None:
+    class FirstCallOverflowLLM(ScriptedLLM):
+        async def chat(
+            self,
+            messages: Sequence[ChatMessage],
+            *,
+            json_mode: bool = False,
+            json_schema: dict[str, Any] | None = None,
+        ) -> LLMResponse:
+            if not self.requests:
+                self.requests.append(list(messages))
+                raise LLMContextOverflowError("prompt exceeds context window")
+            return await super().chat(
+                messages, json_mode=json_mode, json_schema=json_schema
+            )
+
+    class SafeResearcher:
+        async def run(self, _task: str, state: AgentState) -> WorkerResult:
+            assert state.current_agent == "researcher"
+            return WorkerResult(answer="Unsupported biography claims")
+
+    class PassingReviewer:
+        async def review(self, *_args: object, **_kwargs: object) -> SimpleNamespace:
+            return SimpleNamespace(verdict=ReviewVerdict(status="pass"), tool_calls=[])
+
+    llm = FirstCallOverflowLLM([
+        '{"action":"final_answer","answer":"' + NO_SOURCE_RESEARCH_ANSWER + '"}',
+    ])
+    state = await Supervisor(
+        llm, {"researcher": SafeResearcher()}, reviewer=PassingReviewer()
+    ).run("Cihan Top kimdir?")
+
+    assert state.final_answer == NO_SOURCE_RESEARCH_ANSWER
+    assert state.completed_tasks and state.pending_tasks == []
+    assert state.agent_outputs[-1].agent == "researcher"
+    assert state.agent_outputs[-1].answer == NO_SOURCE_RESEARCH_ANSWER
+
+
+@pytest.mark.asyncio
+async def test_research_worker_context_overflow_completes_with_abstention() -> None:
+    class OverflowResearcher:
+        async def run(self, _task: str, _state: AgentState) -> WorkerResult:
+            raise LLMContextOverflowError("research prompt exceeds context window")
+
+    class PassingReviewer:
+        async def review(self, *_args: object, **_kwargs: object) -> SimpleNamespace:
+            return SimpleNamespace(verdict=ReviewVerdict(status="pass"), tool_calls=[])
+
+    llm = ScriptedLLM([
+        '{"action":"delegate","next_agent":"researcher","task":"Araştır",'
+        '"reason":"Kişi araştırması"}',
+        '{"action":"final_answer","answer":"' + NO_SOURCE_RESEARCH_ANSWER + '"}',
+    ])
+    state = await Supervisor(
+        llm, {"researcher": OverflowResearcher()}, reviewer=PassingReviewer()
+    ).run("Cihan Top kimdir?")
+
+    assert state.final_answer == NO_SOURCE_RESEARCH_ANSWER
+    assert state.completed_tasks and state.pending_tasks == []
+    assert [review.status for review in state.reviews] == ["pass"]
+
+
+@pytest.mark.asyncio
+async def test_supervisor_synthesis_context_overflow_uses_completed_output() -> None:
+    class SecondCallOverflowLLM(ScriptedLLM):
+        async def chat(
+            self,
+            messages: Sequence[ChatMessage],
+            *,
+            json_mode: bool = False,
+            json_schema: dict[str, Any] | None = None,
+        ) -> LLMResponse:
+            if len(self.requests) == 1:
+                self.requests.append(list(messages))
+                raise LLMContextOverflowError("synthesis exceeds context window")
+            return await super().chat(
+                messages, json_mode=json_mode, json_schema=json_schema
+            )
+
+    class SafeResearcher:
+        async def run(self, _task: str, _state: AgentState) -> WorkerResult:
+            return WorkerResult(answer=NO_SOURCE_RESEARCH_ANSWER)
+
+    class PassingReviewer:
+        async def review(self, *_args: object, **_kwargs: object) -> SimpleNamespace:
+            return SimpleNamespace(verdict=ReviewVerdict(status="pass"), tool_calls=[])
+
+    llm = SecondCallOverflowLLM([
+        '{"action":"delegate","next_agent":"researcher","task":"Araştır",'
+        '"reason":"Kişi araştırması"}',
+    ])
+    state = await Supervisor(
+        llm, {"researcher": SafeResearcher()}, reviewer=PassingReviewer()
+    ).run("Cihan Top kimdir?")
+
+    assert state.final_answer is not None
+    assert NO_SOURCE_RESEARCH_ANSWER in state.final_answer
+    assert state.completed_tasks and state.pending_tasks == []
+
+
+@pytest.mark.asyncio
 async def test_research_answer_survives_invalid_supervisor_final_decision() -> None:
     answer = "Hüseyin Çimşir, eski futbolcu ve teknik direktördür. Kaynak: https://example.com"
 
     class PersonResearcher:
         async def run(self, _task: str, state: AgentState) -> WorkerResult:
             assert state.current_agent == "researcher"
-            return WorkerResult(answer=answer)
+            return WorkerResult(answer=answer, tool_results=[ToolCallRecord(
+                tool="wikipedia_lookup", arguments={"title": "Hüseyin Çimşir"},
+                result=ToolResult.ok(
+                    '{"title":"Hüseyin Çimşir","extract":"Eski futbolcu ve teknik direktör.",'
+                    '"url":"https://tr.wikipedia.org/wiki/H%C3%BCseyin_%C3%87im%C5%9Fir"}'
+                ),
+            )])
 
     class PassingReviewer:
         async def review(self, *_args: object, **_kwargs: object) -> SimpleNamespace:
@@ -130,7 +239,8 @@ async def test_research_answer_survives_invalid_supervisor_final_decision() -> N
             llm, {"researcher": PersonResearcher()}, reviewer=PassingReviewer()
         ).run("Huseyin Cimsir kimdir?")
 
-    assert state.final_answer == answer
+    assert state.final_answer is not None and state.final_answer.startswith(answer)
+    assert "https://tr.wikipedia.org/wiki/" in state.final_answer
     assert state.reviews[0].status == "pass"
     assert state.pending_tasks == []
     assert any(event.event == "agent_error" for event in recorder.events)

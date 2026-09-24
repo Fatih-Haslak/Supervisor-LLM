@@ -6,7 +6,7 @@ import pytest
 
 from app.agents.chat import automatic_mode, run_chat
 from app.llm.schemas import ChatMessage, LLMResponse
-from app.memory.store import MemoryInput, SQLiteMemoryStore
+from app.memory.store import MemoryEntry, MemoryInput, SQLiteMemoryStore
 from app.orchestration.state import AgentState
 from app.security.approvals import Approver
 from app.service.conversations import SQLiteConversationStore
@@ -63,6 +63,21 @@ async def test_chat_uses_history_for_ordinary_followup_and_identity() -> None:
     identity = await run_chat(llm, "Senin adın ne?", history)
     assert identity.final_answer == "Ben Yerel Agent adlı asistanım."
     assert len(llm.requests) == 1
+
+
+@pytest.mark.asyncio
+async def test_saved_name_is_used_for_greetings_and_name_recall() -> None:
+    llm = ChatLLM()
+    memories = [MemoryEntry(
+        key="name", value="Fatih Haşlak", category="fact",
+        updated_at="2026-09-24 00:00:00",
+    )]
+
+    greeting = await run_chat(llm, "selam", [], memories)
+    assert greeting.final_answer == "Selam Fatih Haşlak! Nasılsın?"
+    recall = await run_chat(llm, "Adım ne?", [], memories)
+    assert recall.final_answer == "Adın Fatih Haşlak."
+    assert llm.requests == []
 
 
 @pytest.mark.asyncio

@@ -5,6 +5,7 @@ from collections.abc import Sequence
 
 from app.llm.client import LLMClient, LLMError
 from app.llm.schemas import ChatMessage
+from app.memory.store import MemoryEntry
 from app.orchestration.state import AgentState
 
 _TASK_CUES = re.compile(
@@ -29,6 +30,10 @@ _ASK_ASSISTANT_NAME = re.compile(
     r"\b(?:senin\s+adın|senin\s+ismin|adın\s+ne|ismin\s+ne)\b",
     flags=re.IGNORECASE,
 )
+_GREETING = re.compile(
+    r"^\s*(?:selam|merhaba|günaydın|iyi\s+(?:akşamlar|günler)|nasılsın)\b",
+    flags=re.IGNORECASE,
+)
 
 
 def automatic_mode(message: str) -> str:
@@ -43,8 +48,18 @@ def automatic_mode(message: str) -> str:
 
 
 async def run_chat(
-    llm: LLMClient, message: str, history: Sequence[ChatMessage]
+    llm: LLMClient, message: str, history: Sequence[ChatMessage],
+    memories: Sequence[MemoryEntry] = (),
 ) -> AgentState:
+    saved_name = next(
+        (entry.value for entry in memories if entry.key.casefold() == "name"), None
+    )
+    if saved_name and _GREETING.search(message):
+        state = AgentState.for_request(message, ChatMessage(
+            role="system", content="Personalized greeting using saved user name"
+        ))
+        state.finish(f"Selam {saved_name}! Nasılsın?")
+        return state
     if _ASK_USER_NAME.search(message) and not _USER_NAME.search(message):
         for earlier in reversed(history):
             if earlier.role != "user":
@@ -57,6 +72,12 @@ async def run_chat(
                 ))
                 state.finish(answer)
                 return state
+        if saved_name:
+            state = AgentState.for_request(message, ChatMessage(
+                role="system", content="Saved user name recall"
+            ))
+            state.finish(f"Adın {saved_name}.")
+            return state
     if _ASK_ASSISTANT_NAME.search(message) and not _ASK_USER_NAME.search(message):
         state = AgentState.for_request(message, ChatMessage(
             role="system", content="Assistant identity"

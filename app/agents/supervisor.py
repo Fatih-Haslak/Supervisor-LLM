@@ -8,9 +8,14 @@ from typing import Annotated, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
-from app.agents.reviewer import ReviewerAgent
+from app.agents.reviewer import (
+    NO_SOURCE_RESEARCH_ANSWER,
+    RESEARCH_UNVERIFIED_ANSWER,
+    ReviewerAgent,
+    public_sources_from_tools,
+)
 from app.agents.single import AgentLimitError, RepeatedToolError, SingleAgent
-from app.llm.client import LLMClient
+from app.llm.client import LLMClient, LLMContextOverflowError
 from app.llm.schemas import ChatMessage
 from app.llm.structured import StructuredOutputError
 from app.observability.events import agent_span, record
@@ -382,14 +387,44 @@ class Supervisor:
                         "with overwrite=true when the task uses workspace files."
                     )
                 assignment += feedback_text
-            result = await self._run_worker(
-                state, agent, assignment, complete=False, planned_id=planned_id
-            )
-            state.current_agent = "reviewer"
-            with agent_span("reviewer"):
-                review = await self._reviewer.review(
-                    state.user_request, task, result, evidence_tools=state.tool_results
+            try:
+                result = await self._run_worker(
+                    state, agent, assignment, complete=False, planned_id=planned_id
                 )
+            except LLMContextOverflowError:
+                if agent != "researcher" or not _research_only_request(state.user_request):
+                    raise
+                result = WorkerResult(answer=self._research_fallback(state))
+                self._record_worker_result(
+                    state, agent, assignment, result, complete=False,
+                    planned_id=planned_id,
+                )
+                self._append_research_fallback_notice(state, result.answer)
+            if (agent == "researcher" and _research_only_request(state.user_request)
+                    and not public_sources_from_tools(state.tool_results)):
+                # No source is a normal research outcome. Replace any unsupported
+                # worker claims with a bounded answer that the reviewer can verify.
+                result = self._apply_research_fallback(
+                    state, result, agent, planned_id,
+                    answer=NO_SOURCE_RESEARCH_ANSWER,
+                )
+            state.current_agent = "reviewer"
+            try:
+                with agent_span("reviewer"):
+                    review = await self._reviewer.review(
+                        state.user_request, task, result, evidence_tools=state.tool_results
+                    )
+            except LLMContextOverflowError:
+                if agent != "researcher" or not _research_only_request(state.user_request):
+                    raise
+                result = self._apply_research_fallback(
+                    state, result, agent, planned_id,
+                    answer=self._research_fallback(state, verification_failed=True),
+                )
+                with agent_span("reviewer"):
+                    review = await self._reviewer.review(
+                        state.user_request, task, result, evidence_tools=state.tool_results
+                    )
             record("review_verdict", agent="reviewer", success=review.verdict.status == "pass",
                    retry_count=attempt - 1)
             state.tool_results.extend(review.tool_calls)
@@ -411,10 +446,64 @@ class Supervisor:
                 state.pending_tasks.remove(task)
                 return True
             feedback = review.verdict.issues
+        if agent == "researcher" and _research_only_request(state.user_request):
+            # When available evidence cannot support the requested claims after bounded
+            # retries, return an explicit abstention instead of failing the whole task.
+            result = self._apply_research_fallback(
+                state, result, agent, planned_id,
+                answer=self._research_fallback(state, verification_failed=True),
+            )
+            fallback_review = await self._reviewer.review(
+                state.user_request, task, result, evidence_tools=state.tool_results
+            )
+            state.reviews.append(ReviewRecord(
+                agent=agent, task=task, attempt=self._max_review_retries + 2,
+                status=fallback_review.verdict.status,
+                issues=fallback_review.verdict.issues,
+            ))
+            state.messages.append(ChatMessage(
+                role="user", content="Research abstention review: "
+                + fallback_review.verdict.model_dump_json(),
+            ))
+            if fallback_review.verdict.status == "pass":
+                state.completed_tasks.append(task)
+                state.pending_tasks.remove(task)
+                state.current_agent = "supervisor"
+                return True
         state.fail(
             "İnceleme geçilemedi; görev tamamlanmadı. Sorunlar: " + "; ".join(feedback)
         )
         return False
+
+    @staticmethod
+    def _research_fallback(state: AgentState, *, verification_failed: bool = False) -> str:
+        if verification_failed or public_sources_from_tools(state.tool_results):
+            return RESEARCH_UNVERIFIED_ANSWER
+        return NO_SOURCE_RESEARCH_ANSWER
+
+    @staticmethod
+    def _append_research_fallback_notice(state: AgentState, answer: str) -> None:
+        state.messages.append(ChatMessage(
+            role="user",
+            content=(
+                "Research fallback (authoritative): stop factual claims because this "
+                "research step reached the model context limit. Reply only with: " + answer
+            ),
+        ))
+
+    @classmethod
+    def _apply_research_fallback(
+        cls, state: AgentState, result: WorkerResult, agent: str,
+        planned_id: int | None, *, answer: str,
+    ) -> WorkerResult:
+        result = result.model_copy(update={"answer": answer})
+        for index in range(len(state.agent_outputs) - 1, -1, -1):
+            output = state.agent_outputs[index]
+            if output.agent == agent and output.planned_id == planned_id:
+                state.agent_outputs[index] = output.model_copy(update={"answer": answer})
+                break
+        cls._append_research_fallback_notice(state, answer)
+        return result
 
     async def _synthesize(self, state: AgentState) -> str:
         messages = [
@@ -484,6 +573,34 @@ class Supervisor:
             state.step_count = round_number
             try:
                 decision = await self._decide(state)
+            except LLMContextOverflowError:
+                if state.agent_outputs and not state.pending_tasks:
+                    answer = self._fallback_worker_answer(state)
+                    record("supervisor_fallback", agent="supervisor", success=True,
+                           error_type="LLMContextOverflowError")
+                    state.finish(answer)
+                    return state
+                if not state.agent_outputs and round_number == 1:
+                    fallback_agent = self._context_fallback_agent(state.user_request)
+                    if fallback_agent is not None:
+                        decision = DelegateDecision(
+                            action="delegate", next_agent=fallback_agent,
+                            task=state.user_request,
+                            reason="Supervisor prompt exceeded the model context window",
+                        )
+                        record("context_fallback", agent=fallback_agent)
+                    else:
+                        state.fail(
+                            "İstek yerel modelin bağlam sınırını aşıyor. Lütfen isteği "
+                            "veya konuşma geçmişini kısaltıp yeniden deneyin."
+                        )
+                        return state
+                else:
+                    state.fail(
+                        "Görev yerel modelin bağlam sınırına ulaştı. Tamamlanan sonuçlar "
+                        "korundu; kalan adımlar için daha kısa bir istekle yeniden deneyin."
+                    )
+                    return state
             except StructuredOutputError:
                 if not state.agent_outputs or state.pending_tasks:
                     raise
@@ -510,8 +627,33 @@ class Supervisor:
                 ):
                     return state
             else:
-                await self._run_worker(state, decision.next_agent, decision.task)
+                try:
+                    await self._run_worker(state, decision.next_agent, decision.task)
+                except LLMContextOverflowError:
+                    if (decision.next_agent == "researcher"
+                            and _research_only_request(state.user_request)):
+                        fallback = WorkerResult(answer=self._research_fallback(state))
+                        self._record_worker_result(
+                            state, decision.next_agent, decision.task, fallback,
+                            complete=True, planned_id=None,
+                        )
+                        self._append_research_fallback_notice(state, fallback.answer)
+                    else:
+                        state.fail(
+                            "Agent görevi yerel modelin bağlam sınırına ulaştı. Lütfen "
+                            "isteği kısaltıp yeniden deneyin."
+                        )
+                        return state
         raise SupervisorLimitError("Maximum supervisor rounds reached")
+
+    def _context_fallback_agent(self, request: str) -> str | None:
+        if _research_only_request(request) and "researcher" in self._workers:
+            return "researcher"
+        if _is_local_document_search(request) and "researcher" in self._workers:
+            return "researcher"
+        if _is_inline_python_request(request) and "coder" in self._workers:
+            return "coder"
+        return None
 
     @staticmethod
     def _fallback_worker_answer(state: AgentState) -> str:
@@ -553,7 +695,7 @@ class Supervisor:
                 self._planner_llm, self._workers,
                 auto_review=self._reviewer is not None,
             ).plan(state.user_request, history=history)
-        except StructuredOutputError:
+        except (StructuredOutputError, LLMContextOverflowError):
             record("plan_fallback", agent="supervisor")
             return await self.run(user_request, history=history)
         if _research_only_request(user_request):

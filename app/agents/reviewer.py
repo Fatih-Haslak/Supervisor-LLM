@@ -25,6 +25,63 @@ _METRIC_LABELS = {
     "En yüksek": "maximum",
 }
 
+NO_SOURCE_RESEARCH_ANSWER = (
+    "Bu konuda güvenilir bir kaynak bulamadım; bu yüzden doğrulanmış bilgi veremiyorum. "
+    "İstersen adı farklı yazımlarla veya ek ipuçlarıyla yeniden araştırabilirim."
+)
+RESEARCH_UNVERIFIED_ANSWER = (
+    "Araştırma sonuçlarını güvenilir biçimde doğrulayamadım; doğrulanmamış ayrıntı "
+    "vermiyorum. İstersen daha dar bir sorguyla yeniden deneyebilirim."
+)
+
+
+def public_sources_from_tools(tools: Sequence[ToolCallRecord]) -> list[dict[str, str]]:
+    """Return only successfully fetched, well-formed public source evidence."""
+    public_sources: list[dict[str, str]] = []
+    wiki_calls = [
+        call for call in tools
+        if call.tool == "wikipedia_lookup" and call.result.success and call.result.output
+    ]
+    for call in [call for call in tools if call.tool == "web_search"
+                 and call.result.success and call.result.output][-3:]:
+        try:
+            payload = json.loads(call.result.output or "")
+        except (ValueError, TypeError):
+            continue
+        rows = payload.get("results") if isinstance(payload, dict) else None
+        if not isinstance(rows, list):
+            continue
+        for source in rows[:5]:
+            if (not isinstance(source, dict) or not isinstance(source.get("title"), str)
+                    or not isinstance(source.get("snippet"), str)
+                    or not isinstance(source.get("url"), str)
+                    or not source["url"].startswith("https://")):
+                continue
+            public_sources.append({
+                "title": source["title"][:160], "extract": source["snippet"][:900],
+                "url": source["url"][:500], "language": "web",
+            })
+    for call in wiki_calls[-3:]:
+        try:
+            source = json.loads(call.result.output or "")
+        except (ValueError, TypeError):
+            continue
+        if (isinstance(source, dict)
+                and isinstance(source.get("title"), str)
+                and isinstance(source.get("extract"), str)
+                and isinstance(source.get("url"), str)
+                and source["url"].startswith((
+                    "https://tr.wikipedia.org/wiki/",
+                    "https://en.wikipedia.org/wiki/",
+                ))):
+            public_sources.append({
+                "title": source["title"][:160],
+                "extract": source["extract"][:1200],
+                "url": source["url"][:500],
+                "language": str(source.get("language", ""))[:8],
+            })
+    return public_sources
+
 
 def _inline_code(request: str) -> str | None:
     match = re.search(
@@ -114,6 +171,10 @@ class ReviewerAgent:
         evidence_tools: Sequence[ToolCallRecord] | None = None,
     ) -> ReviewResult:
         tools = evidence_tools if evidence_tools is not None else worker_result.tool_results
+        if worker_result.answer.strip() in {
+            NO_SOURCE_RESEARCH_ANSWER, RESEARCH_UNVERIFIED_ANSWER,
+        }:
+            return ReviewResult(verdict=ReviewVerdict(status="pass"))
         paths_found = [
             call.arguments.get("path")
             for call in tools
@@ -123,50 +184,7 @@ class ReviewerAgent:
             dict.fromkeys(path for path in reversed(paths_found) if isinstance(path, str))
         )[:3]
         inline_code = _inline_code(user_request)
-        wiki_calls = [
-            call for call in tools
-            if call.tool == "wikipedia_lookup" and call.result.success
-            and call.result.output
-        ]
-        public_sources: list[dict[str, str]] = []
-        for call in [call for call in tools if call.tool == "web_search"
-                     and call.result.success and call.result.output][-3:]:
-            try:
-                payload = json.loads(call.result.output or "")
-            except (ValueError, TypeError):
-                continue
-            rows = payload.get("results") if isinstance(payload, dict) else None
-            if not isinstance(rows, list):
-                continue
-            for source in rows[:5]:
-                if (not isinstance(source, dict) or not isinstance(source.get("title"), str)
-                        or not isinstance(source.get("snippet"), str)
-                        or not isinstance(source.get("url"), str)
-                        or not source["url"].startswith("https://")):
-                    continue
-                public_sources.append({
-                    "title": source["title"][:160], "extract": source["snippet"][:900],
-                    "url": source["url"][:500], "language": "web",
-                })
-        for call in wiki_calls[-3:]:
-            try:
-                source = json.loads(call.result.output or "")
-            except (ValueError, TypeError):
-                continue
-            if (isinstance(source, dict)
-                    and isinstance(source.get("title"), str)
-                    and isinstance(source.get("extract"), str)
-                    and isinstance(source.get("url"), str)
-                    and source["url"].startswith((
-                        "https://tr.wikipedia.org/wiki/",
-                        "https://en.wikipedia.org/wiki/",
-                    ))):
-                public_sources.append({
-                    "title": source["title"][:160],
-                    "extract": source["extract"][:1200],
-                    "url": source["url"][:500],
-                    "language": str(source.get("language", ""))[:8],
-                })
+        public_sources = public_sources_from_tools(tools)
         if not paths and inline_code is None and not public_sources:
             return ReviewResult(
                 verdict=ReviewVerdict(
